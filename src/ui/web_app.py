@@ -250,26 +250,171 @@ def _download_button(label: str, dataframe: pd.DataFrame, filename: str) -> None
     )
 
 
+def _load_uploaded_file(uploaded_file: "st.runtime.uploaded_file_manager.UploadedFile") -> pd.DataFrame:
+    """Read uploaded CSV or Excel file into a dataframe."""
+    suffix = Path(uploaded_file.name).suffix.lower()
+    if suffix in {".xlsx", ".xls"}:
+        return pd.read_excel(uploaded_file)
+    return pd.read_csv(uploaded_file)
+
+
 def main() -> None:
     """Streamlit application entry point."""
     st.set_page_config(
-        page_title="NMD ALM Engine",
+        page_title="ALM Validation - Deposit Accounts: DCF Calculation Engine",
         page_icon="📊",
         layout="wide",
     )
-    st.title("Non-Maturity Deposit ALM Cash Flow Engine")
-    st.write(
-        "Upload a CSV, map fields, enter manual assumptions, and run cash flow projections "
-        "across interest rate scenarios."
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background: linear-gradient(180deg, #0f2d63 0%, #133f7f 45%, #0f2d63 100%);
+            color: #ffffff;
+        }
+        .hero-card {
+            background: rgba(19, 63, 127, 0.70);
+            border: 1px solid rgba(255, 194, 61, 0.5);
+            box-shadow: 0 18px 45px rgba(3, 14, 40, 0.35);
+            border-radius: 24px;
+            padding: 42px 50px;
+            margin-bottom: 28px;
+        }
+        .hero-card h1 {
+            font-size: 2.4rem;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: #ffffff;
+        }
+        .hero-card p {
+            font-size: 1.05rem;
+            line-height: 1.6;
+            color: #e9f0ff;
+            margin-bottom: 24px;
+        }
+        .accent-line {
+            width: 140px;
+            height: 5px;
+            border-radius: 4px;
+            background: #ffc94b;
+            margin: 14px 0 28px 0;
+        }
+        .flow-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 18px;
+        }
+        .flow-step {
+            background: rgba(12, 36, 82, 0.85);
+            border: 1px solid rgba(255, 201, 75, 0.4);
+            border-radius: 18px;
+            padding: 18px 20px;
+            color: #ffffff;
+            font-size: 0.95rem;
+            min-height: 140px;
+        }
+        .flow-step span {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #ffc94b;
+            color: #0f2d63;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+        .section-header {
+            color: #ffffff;
+            margin-top: 12px;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .stDataFrame, .stTable {
+            background: rgba(255, 255, 255, 0.95) !important;
+            border-radius: 12px;
+            padding: 10px;
+        }
+        .footer-credit {
+            position: fixed;
+            bottom: 24px;
+            right: 28px;
+            background: rgba(8, 30, 68, 0.9);
+            color: #ffffff;
+            padding: 10px 20px;
+            border-radius: 999px;
+            border: 1px solid #ffc94b;
+            font-size: 0.85rem;
+            z-index: 999;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+        }
+        .stButton > button {
+            background: linear-gradient(135deg, #ffc94b, #f0a500);
+            color: #0f2d63;
+            font-weight: 700;
+            border: none;
+            border-radius: 999px;
+            padding: 0.6rem 1.8rem;
+        }
+        .stButton > button:hover {
+            background: linear-gradient(135deg, #ffd66b, #ffb400);
+            color: #08214a;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    uploaded_file = st.file_uploader("Upload account-level CSV data", type=["csv"])
+    st.markdown(
+        """
+        <div class="hero-card">
+            <h1>ALM Validation – Deposit Accounts: DCF Calculation Engine</h1>
+            <div class="accent-line"></div>
+            <p>
+                This interactive engine empowers ALM teams to validate non-maturity deposit assumptions,
+                project monthly cash flows, and quantify economic value of equity (EVE) impacts under
+                multiple rate environments. Upload raw portfolio extracts, tailor behavioral assumptions,
+                and instantly compare scenario-driven valuations.
+            </p>
+            <div class="flow-grid">
+                <div class="flow-step">
+                    <span>1</span>
+                    Upload portfolio data (CSV or Excel) and map fields to the required schema.
+                </div>
+                <div class="flow-step">
+                    <span>2</span>
+                    Choose segmentation (portfolio, account type, customer, or cross) and enter
+                    decay, WAL, and beta assumptions for each segment.
+                </div>
+                <div class="flow-step">
+                    <span>3</span>
+                    Configure discounting (single rate or term structure) and base market rate path.
+                </div>
+                <div class="flow-step">
+                    <span>4</span>
+                    Select parallel rate scenarios from ±100 bps to ±400 bps and execute projections.
+                </div>
+                <div class="flow-step">
+                    <span>5</span>
+                    Review dynamic summaries, download cash flow and PV detail, and share results.
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload account-level data (CSV or Excel)", type=["csv", "xlsx", "xls"]
+    )
     if uploaded_file is not None:
         if "uploaded_filename" not in st.session_state or (
             st.session_state.get("uploaded_filename") != uploaded_file.name
         ):
             st.session_state["uploaded_filename"] = uploaded_file.name
-            st.session_state["uploaded_df"] = pd.read_csv(uploaded_file)
+            st.session_state["uploaded_df"] = _load_uploaded_file(uploaded_file)
             _reset_state_on_upload()
     else:
         st.session_state.pop("uploaded_df", None)
@@ -494,6 +639,11 @@ def main() -> None:
         f"Download account-level PV ({selected_scenario})",
         account_pv,
         f"account_pv_{selected_scenario}.csv",
+    )
+
+    st.markdown(
+        '<div class="footer-credit">Created by Achyuth Rachur</div>',
+        unsafe_allow_html=True,
     )
 
 
