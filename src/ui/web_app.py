@@ -1,0 +1,495 @@
+"""Streamlit web interface for the NMD ALM engine."""
+
+from __future__ import annotations
+
+from typing import Dict, Iterable, List, Optional, Tuple
+
+import pandas as pd
+import streamlit as st
+
+from ..core.validator import ValidationError
+from ..engine import ALMEngine
+
+REQUIRED_FIELDS = {
+    "account_id": "Unique account identifier",
+    "balance": "Current balance",
+    "interest_rate": "Current interest rate (decimal)",
+}
+OPTIONAL_FIELDS = {
+    "account_type": "Account type (for segmentation)",
+    "customer_segment": "Customer segment (for segmentation)",
+    "rate_type": "Rate type metadata (optional)",
+}
+
+DEFAULT_ASSUMPTIONS = {
+    "checking": {"decay_rate": 0.05, "wal_years": 5.0, "beta_up": 0.40, "beta_down": 0.25},
+    "savings": {"decay_rate": 0.08, "wal_years": 3.5, "beta_up": 0.55, "beta_down": 0.35},
+    "money market": {"decay_rate": 0.20, "wal_years": 1.5, "beta_up": 0.75, "beta_down": 0.60},
+}
+
+SCENARIO_OPTIONS = [
+    ("parallel_100", "+100 bps parallel shock", True),
+    ("parallel_200", "+200 bps parallel shock", True),
+    ("parallel_300", "+300 bps parallel shock", False),
+    ("parallel_400", "+400 bps parallel shock", False),
+    ("parallel_minus_100", "-100 bps parallel shock", True),
+    ("parallel_minus_200", "-200 bps parallel shock", False),
+    ("parallel_minus_300", "-300 bps parallel shock", False),
+    ("parallel_minus_400", "-400 bps parallel shock", False),
+]
+
+TENOR_LABELS: List[Tuple[int, str]] = [
+    (3, "3 Months"),
+    (6, "6 Months"),
+    (12, "1 Year"),
+    (24, "2 Years"),
+    (36, "3 Years"),
+    (60, "5 Years"),
+    (84, "7 Years"),
+    (120, "10 Years"),
+]
+
+
+def _reset_state_on_upload() -> None:
+    """Clear downstream state when a new file is uploaded."""
+    for key in [
+        "field_map",
+        "optional_fields",
+        "mapping_confirmed",
+        "mapped_df",
+        "assumptions",
+        "run_results",
+    ]:
+        st.session_state.pop(key, None)
+
+
+def _infer_defaults(columns: Iterable[str]) -> Dict[str, str]:
+    """Suggest mappings based on simple column name matching."""
+    mapping: Dict[str, str] = {}
+    lower = {col.lower(): col for col in columns}
+    for canonical in list(REQUIRED_FIELDS) + list(OPTIONAL_FIELDS):
+        canonical_no_underscore = canonical.replace("_", "")
+        for candidate, original in lower.items():
+            if candidate == canonical or candidate.replace("_", "") == canonical_no_underscore:
+                mapping[canonical] = original
+                break
+    return mapping
+
+
+def _default_for_segment(segment: str) -> Dict[str, float]:
+    """Return suggested assumptions for a segment."""
+    key = segment.lower()
+    for pattern, defaults in DEFAULT_ASSUMPTIONS.items():
+        if pattern in key:
+            return defaults
+    return DEFAULT_ASSUMPTIONS["checking"]
+
+
+def _decimalize(value: float) -> float:
+    """Convert percentage-based inputs to decimals."""
+    if value is None:
+        return 0.0
+    if value > 1.5:
+        return value / 100.0
+    return value
+
+
+def _derive_segments(
+    dataframe: pd.DataFrame, segmentation: str
+) -> Tuple[List[str], pd.DataFrame]:
+    """Determine segment keys and produce a summary table."""
+    if segmentation == "all":
+        total_accounts = int(len(dataframe))
+        total_balance = float(dataframe["balance"].sum())
+        summary = pd.DataFrame(
+            [{
+                "segment": "ALL",
+                "accounts": total_accounts,
+                "balance": total_balance,
+            }]
+        )
+        return ["ALL"], summary
+
+    if segmentation == "by_account_type":
+        column = "account_type"
+    elif segmentation == "by_customer_segment":
+        column = "customer_segment"
+    elif segmentation == "cross":
+        column = None
+    else:
+        raise ValueError(f"Unsupported segmentation method: {segmentation}")
+
+    df = dataframe.copy()
+    if segmentation == "cross":
+        missing_mask = df["account_type"].isna() | df["customer_segment"].isna()
+        if missing_mask.any():
+            st.warning(
+                "Rows with missing account type or customer segment are excluded "
+                "from cross segmentation."
+            )
+        df = df.loc[~missing_mask].copy()
+        df["segment_key"] = (
+            df["account_type"].astype(str) + "::" + df["customer_segment"].astype(str)
+        )
+        summary = (
+            df.groupby("segment_key")
+            .agg(accounts=("account_id", "count"), balance=("balance", "sum"))
+            .reset_index()
+            .rename(columns={"segment_key": "segment"})
+        )
+        segments = summary["segment"].tolist()
+        return segments, summary
+
+    missing_mask = df[column].isna()
+    if missing_mask.any():
+        st.warning(
+            f"Rows with missing values in '{column}' are excluded from segmentation calculations."
+        )
+    df = df.loc[~missing_mask].copy()
+    df[column] = df[column].astype(str)
+    summary = (
+        df.groupby(column)
+        .agg(accounts=("account_id", "count"), balance=("balance", "sum"))
+        .reset_index()
+        .rename(columns={column: "segment"})
+    )
+    segments = summary["segment"].tolist()
+    return segments, summary
+
+
+def _validate_mapping(unique_columns: List[str], mapping: Dict[str, str]) -> Optional[str]:
+    """Ensure field mapping selections are valid."""
+    chosen = [value for value in mapping.values() if value]
+    duplicates = {col for col in chosen if chosen.count(col) > 1}
+    if duplicates:
+        return (
+            "Each column can only be mapped once. Duplicate selections: "
+            + ", ".join(sorted(duplicates))
+        )
+    required_missing = [field for field in REQUIRED_FIELDS if not mapping.get(field)]
+    if required_missing:
+        return "Missing required field mapping(s): " + ", ".join(required_missing)
+    return None
+
+
+def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float]]:
+    """Collect assumption inputs for each segment from the UI."""
+    st.markdown("#### Assumption Entry")
+    assumption_values: Dict[str, Dict[str, float]] = {}
+    for segment in segments:
+        defaults = _default_for_segment(segment)
+        decay = st.number_input(
+            f"{segment} – Decay / Runoff Rate (annual decimal)",
+            min_value=0.0,
+            max_value=1.0,
+            value=defaults["decay_rate"],
+            step=0.01,
+            key=f"decay_{segment}",
+        )
+        wal = st.number_input(
+            f"{segment} – Weighted Average Life (years)",
+            min_value=0.1,
+            max_value=15.0,
+            value=defaults["wal_years"],
+            step=0.1,
+            key=f"wal_{segment}",
+        )
+        beta_up = st.number_input(
+            f"{segment} – Deposit Beta (rising rates)",
+            min_value=0.0,
+            max_value=1.5,
+            value=defaults["beta_up"],
+            step=0.05,
+            key=f"beta_up_{segment}",
+        )
+        beta_down = st.number_input(
+            f"{segment} – Repricing Beta (falling rates)",
+            min_value=0.0,
+            max_value=1.5,
+            value=defaults["beta_down"],
+            step=0.05,
+            key=f"beta_down_{segment}",
+        )
+        assumption_values[segment] = {
+            "decay_rate": decay,
+            "wal_years": wal,
+            "beta_up": beta_up,
+            "beta_down": beta_down,
+        }
+    return assumption_values
+
+
+def _collect_scenarios() -> Dict[str, bool]:
+    """Capture scenario selections from the user."""
+    st.markdown("#### Scenario Selection")
+    scenario_flags = {"base": True}
+    st.checkbox("Base case (no shock)", value=True, disabled=True, key="scenario_base")
+    cols = st.columns(2)
+    for idx, (scenario_id, label, default) in enumerate(SCENARIO_OPTIONS):
+        with cols[idx % 2]:
+            scenario_flags[scenario_id] = st.checkbox(
+                label, value=default, key=f"scenario_{scenario_id}"
+            )
+    return scenario_flags
+
+
+def _download_button(label: str, dataframe: pd.DataFrame, filename: str) -> None:
+    """Render a reusable download button for CSV exports."""
+    csv_bytes = dataframe.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label,
+        data=csv_bytes,
+        file_name=filename,
+        mime="text/csv",
+    )
+
+
+def main() -> None:
+    """Streamlit application entry point."""
+    st.set_page_config(
+        page_title="NMD ALM Engine",
+        page_icon="📊",
+        layout="wide",
+    )
+    st.title("Non-Maturity Deposit ALM Cash Flow Engine")
+    st.write(
+        "Upload a CSV, map fields, enter manual assumptions, and run cash flow projections "
+        "across interest rate scenarios."
+    )
+
+    uploaded_file = st.file_uploader("Upload account-level CSV data", type=["csv"])
+    if uploaded_file is not None:
+        if "uploaded_filename" not in st.session_state or (
+            st.session_state.get("uploaded_filename") != uploaded_file.name
+        ):
+            st.session_state["uploaded_filename"] = uploaded_file.name
+            st.session_state["uploaded_df"] = pd.read_csv(uploaded_file)
+            _reset_state_on_upload()
+    else:
+        st.session_state.pop("uploaded_df", None)
+
+    df_raw: Optional[pd.DataFrame] = st.session_state.get("uploaded_df")
+    if df_raw is None:
+        st.info("Awaiting CSV upload to begin.")
+        return
+
+    st.markdown("### Step 1 – Preview Data & Map Fields")
+    st.dataframe(df_raw.head(10))
+    columns = list(df_raw.columns)
+    defaults = _infer_defaults(columns)
+
+    with st.form("mapping_form"):
+        st.write("Select which source columns correspond to the required fields.")
+        mapping_inputs: Dict[str, str] = {}
+        for field, description in REQUIRED_FIELDS.items():
+            default_column = defaults.get(field)
+            mapping_inputs[field] = st.selectbox(
+                f"{field} ({description})",
+                options=columns,
+                index=columns.index(default_column)
+                if default_column in columns
+                else 0,
+                key=f"map_{field}",
+            )
+
+        st.write("Optional mappings (leave blank to skip).")
+        optional_inputs: Dict[str, Optional[str]] = {}
+        for field, description in OPTIONAL_FIELDS.items():
+            options = ["(Not mapped)"] + columns
+            default_label = defaults.get(field, "(Not mapped)")
+            optional_inputs[field] = st.selectbox(
+                f"{field} ({description})",
+                options=options,
+                index=options.index(default_label) if default_label in options else 0,
+                key=f"map_optional_{field}",
+            )
+
+        mapping_submitted = st.form_submit_button("Confirm Field Mapping")
+
+    if mapping_submitted:
+        field_map = dict(mapping_inputs)
+        optional_fields = [
+            field for field, value in optional_inputs.items() if value and value != "(Not mapped)"
+        ]
+        for field in optional_fields:
+            field_map[field] = optional_inputs[field]  # type: ignore[index]
+
+        error = _validate_mapping(columns, field_map)
+        if error:
+            st.error(error)
+        else:
+            loader = ALMEngine()
+            try:
+                load_result = loader.load_dataframe(df_raw, field_map, optional_fields=optional_fields)
+            except ValidationError as exc:
+                st.error(f"Validation error: {exc}")
+            else:
+                st.session_state["field_map"] = field_map
+                st.session_state["optional_fields"] = optional_fields
+                st.session_state["mapping_confirmed"] = True
+                st.session_state["mapped_df"] = load_result.dataframe
+                st.success("Field mapping saved. Proceed to configure assumptions below.")
+
+    if not st.session_state.get("mapping_confirmed"):
+        return
+
+    mapped_df: pd.DataFrame = st.session_state["mapped_df"]
+
+    st.markdown("### Step 2 – Configure Segmentation & Assumptions")
+    segmentation_friendly = {
+        "All accounts as one segment": "all",
+        "Segment by account type": "by_account_type",
+        "Segment by customer segment": "by_customer_segment",
+        "Cross segmentation (account × customer)": "cross",
+    }
+    segmentation_choice = st.selectbox(
+        "Segmentation method",
+        options=list(segmentation_friendly.keys()),
+        index=0,
+        key="segmentation_choice",
+    )
+    segmentation = segmentation_friendly[segmentation_choice]
+
+    optional_fields = st.session_state.get("optional_fields", [])
+    if segmentation in {"by_account_type", "cross"} and "account_type" not in st.session_state["field_map"]:
+        st.error("Segmentation by account type requires the Account Type field to be mapped.")
+        return
+    if segmentation in {"by_customer_segment", "cross"} and "customer_segment" not in st.session_state["field_map"]:
+        st.error("Segmentation by customer segment requires the Customer Segment field to be mapped.")
+        return
+
+    segments, segment_summary = _derive_segments(mapped_df, segmentation)
+    if not segments:
+        st.error("No segments detected for the selected segmentation method.")
+        return
+
+    st.write("Detected segments:")
+    st.dataframe(segment_summary)
+
+    assumptions = _prepare_assumption_inputs(segments)
+
+    st.markdown("### Step 3 – Projection Settings")
+    projection_months = st.number_input(
+        "Projection horizon (months)",
+        min_value=12,
+        max_value=360,
+        step=12,
+        value=120,
+    )
+
+    discount_method = st.radio(
+        "Discount rate configuration",
+        options=["Single rate", "Yield curve"],
+        index=0,
+        horizontal=True,
+    )
+    discount_config: Dict[int, float] | float
+    if discount_method == "Single rate":
+        discount_rate_input = st.number_input(
+            "Discount rate (annual decimal, e.g., 0.035 for 3.5%)",
+            min_value=0.0,
+            max_value=0.15,
+            value=0.035,
+            step=0.005,
+        )
+        discount_config = discount_rate_input
+    else:
+        st.write("Enter rates for each tenor. Leave blank to omit a point.")
+        tenor_values: Dict[int, float] = {}
+        for tenor, label in TENOR_LABELS:
+            value = st.text_input(label, value="", key=f"tenor_{tenor}")
+            if value.strip():
+                try:
+                    tenor_values[tenor] = _decimalize(float(value.strip()))
+                except ValueError:
+                    st.error(f"Invalid numeric value for {label}.")
+                    return
+        if not tenor_values:
+            st.error("At least one tenor rate is required for yield curve configuration.")
+            return
+        discount_config = tenor_values
+
+    base_rate_input = st.number_input(
+        "Base market rate (annual decimal, e.g., 0.03 for 3%)",
+        min_value=0.0,
+        max_value=0.15,
+        value=0.03,
+        step=0.005,
+    )
+
+    scenario_flags = _collect_scenarios()
+
+    run_clicked = st.button("Run Analysis", type="primary")
+    if not run_clicked:
+        return
+
+    engine = ALMEngine()
+    try:
+        engine.load_dataframe(
+            dataframe=df_raw,
+            field_map=st.session_state["field_map"],
+            optional_fields=st.session_state.get("optional_fields", []),
+        )
+        engine.set_segmentation(segmentation)
+        for segment_key, values in assumptions.items():
+            engine.set_assumptions(
+                segment_key=segment_key,
+                decay_rate=_decimalize(values["decay_rate"]),
+                wal_years=values["wal_years"],
+                beta_up=_decimalize(values["beta_up"]),
+                beta_down=_decimalize(values["beta_down"]),
+            )
+        if isinstance(discount_config, dict):
+            engine.set_discount_yield_curve(discount_config)
+        else:
+            engine.set_discount_single_rate(_decimalize(discount_config))
+        engine.set_base_market_rate_path(_decimalize(base_rate_input))
+        engine.configure_standard_scenarios(scenario_flags)
+        results = engine.run_analysis(projection_months=int(projection_months))
+    except ValidationError as exc:
+        st.error(f"Validation error during execution: {exc}")
+        return
+    except Exception as exc:  # pragma: no cover - guard rail
+        st.error(f"Unexpected error: {exc}")
+        return
+
+    st.session_state["run_results"] = results
+
+    st.success("Analysis complete!")
+    summary_df = results.summary_frame()
+    st.markdown("### Scenario Present Value Summary")
+    st.dataframe(summary_df)
+    _download_button("Download summary CSV", summary_df, "eve_summary.csv")
+
+    scenario_ids = list(results.scenario_results.keys())
+    selected_scenario = st.selectbox(
+        "Select scenario for detailed cash flows",
+        options=scenario_ids,
+        index=0,
+    )
+    scenario_result = results.scenario_results[selected_scenario]
+    cashflows = scenario_result.cashflows
+    monthly_summary = (
+        cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
+        .sum()
+        .reset_index()
+    )
+
+    st.markdown(f"### Cash Flow Detail – {selected_scenario}")
+    st.dataframe(monthly_summary)
+    _download_button(
+        f"Download cashflows ({selected_scenario})",
+        cashflows,
+        f"cashflows_{selected_scenario}.csv",
+    )
+
+    account_pv = scenario_result.account_level_pv
+    _download_button(
+        f"Download account-level PV ({selected_scenario})",
+        account_pv,
+        f"account_pv_{selected_scenario}.csv",
+    )
+
+
+if __name__ == "__main__":
+    main()
