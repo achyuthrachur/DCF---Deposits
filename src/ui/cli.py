@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -10,8 +11,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from ..engine import ALMEngine
-from ..reporting import ReportGenerator
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.engine import ALMEngine
+from src.reporting import ReportGenerator
 
 app = typer.Typer(help="Non-maturity deposit ALM cash flow projection engine")
 console = Console()
