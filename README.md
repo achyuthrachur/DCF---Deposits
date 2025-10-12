@@ -5,7 +5,7 @@ non-maturity deposit portfolios. The engine focuses on manual assumption entry a
 flexible field mapping so it can accommodate institution-specific data layouts.
 
 ## Key Capabilities
-- CSV ingestion with interactive field mapping prompts.
+- CSV/Excel ingestion with interactive field mapping prompts.
 - Support for multiple segmentation approaches (all accounts, by account type, by customer segment).
 - Manual capture of the four core assumptions (decay, WAL, deposit beta, repricing beta).
 - Scenario generation for standard parallel rate shocks.
