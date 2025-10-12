@@ -402,10 +402,10 @@ def main() -> None:
                 </div>
             </div>
         </div>
+        <div class="footer-credit">Created by Achyuth Rachur</div>
         """,
         unsafe_allow_html=True,
     )
-
     uploaded_file = st.file_uploader(
         "Upload account-level data (CSV or Excel)", type=["csv", "xlsx", "xls"]
     )
@@ -639,11 +639,6 @@ def main() -> None:
         f"Download account-level PV ({selected_scenario})",
         account_pv,
         f"account_pv_{selected_scenario}.csv",
-    )
-
-    st.markdown(
-        '<div class="footer-credit">Created by Achyuth Rachur</div>',
-        unsafe_allow_html=True,
     )
 
 
