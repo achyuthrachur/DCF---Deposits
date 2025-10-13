@@ -66,19 +66,22 @@ class CashflowProjector:
         """Project a single account over the requested horizon."""
         monthly_decay = assumptions.monthly_decay_rate()
         balance = account.balance
-        rate = account.interest_rate
+        base_deposit_rate = account.interest_rate
 
         records: List[dict] = []
         for month in range(1, projection_months + 1):
             base_rate = base_rates[month - 1]
             shock = scenario.rate_adjustment(month)
-            scenario_rate = base_rate + shock
-            delta = scenario_rate - base_rate
-            beta = assumptions.beta_up if delta >= 0 else assumptions.beta_down
-            rate_change = delta * beta
-            rate = max(0.0, rate + rate_change)
+            scenario_rate = max(0.0, base_rate + shock)
+            adjusted_rate = self._adjust_deposit_rate(
+                base_deposit_rate=base_deposit_rate,
+                base_market_rate=base_rate,
+                scenario_market_rate=scenario_rate,
+                beta_up=assumptions.beta_up,
+                beta_down=assumptions.beta_down,
+            )
             principal_runoff = balance * monthly_decay
-            interest = balance * (rate / 12)
+            interest = balance * (adjusted_rate / 12)
             ending_balance = balance - principal_runoff
             records.append(
                 {
@@ -89,7 +92,7 @@ class CashflowProjector:
                     "principal": principal_runoff,
                     "interest": interest,
                     "total_cash_flow": principal_runoff + interest,
-                    "account_rate": rate,
+                    "account_rate": adjusted_rate,
                     "scenario_rate": scenario_rate,
                     "base_rate": base_rate,
                     "segment": assumptions.segment_key,
@@ -112,6 +115,21 @@ class CashflowProjector:
         last_rate = rates[-1]
         extended = list(rates) + [last_rate] * (months - len(rates))
         return np.array(extended, dtype=float)
+
+    @staticmethod
+    def _adjust_deposit_rate(
+        *,
+        base_deposit_rate: float,
+        base_market_rate: float,
+        scenario_market_rate: float,
+        beta_up: float,
+        beta_down: float,
+    ) -> float:
+        """Apply deposit beta to the market rate change to derive deposit rate."""
+        market_delta = scenario_market_rate - base_market_rate
+        beta = beta_up if market_delta >= 0 else beta_down
+        adjusted = base_deposit_rate + market_delta * beta
+        return max(0.0, adjusted)
 
     @staticmethod
     def _segmentation_key(method: str) -> str:

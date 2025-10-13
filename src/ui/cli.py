@@ -200,6 +200,9 @@ def run(
     ),
     projection_months: int = typer.Option(120, help="Projection horizon in months"),
     output_dir: Path = typer.Option(Path("output"), help="Directory for report exports"),
+    cashflow_sample_size: int = typer.Option(
+        20, help="Number of accounts to include when exporting detailed cashflows (0 to export all)."
+    ),
 ) -> None:
     """Run the ALM engine with manual input prompts."""
     if not file_path.exists():
@@ -289,7 +292,9 @@ def run(
 
     reporter = ReportGenerator(output_dir)
     summary_path = reporter.export_summary(results)
-    base_cashflow_path = reporter.export_cashflows(results, "base")
+    base_cashflow_path = reporter.export_cashflows(
+        results, "base", sample_size=max(0, cashflow_sample_size)
+    )
 
     console.print("\n[bold green]Analysis complete![/bold green]")
     console.print(f"Summary exported to: {summary_path}")

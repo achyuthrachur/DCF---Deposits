@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
+from src.reporting.report_generator import ReportGenerator
 
 REQUIRED_FIELDS = {
     "account_id": "Unique account identifier",
@@ -57,6 +58,8 @@ TENOR_LABELS: List[Tuple[int, str]] = [
     (84, "7 Years"),
     (120, "10 Years"),
 ]
+
+CASHFLOW_SAMPLE_SIZE = 20
 
 
 def _reset_state_on_upload() -> None:
@@ -820,9 +823,12 @@ def main() -> None:
 
         st.markdown(f"### Cash Flow Detail – {selected_scenario}")
         st.dataframe(monthly_summary)
+        sampled_cashflows = ReportGenerator.sample_cashflows(
+            cashflows, sample_size=CASHFLOW_SAMPLE_SIZE
+        )
         _download_button(
             f"Download cashflows ({selected_scenario})",
-            cashflows,
+            sampled_cashflows,
             f"cashflows_{selected_scenario}.csv",
         )
 
