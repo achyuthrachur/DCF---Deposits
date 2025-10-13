@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,7 +26,11 @@ class ScenarioResult(BaseModel):
         ...,
         description="Account-level PV detail with columns ['account_id', 'pv']",
     )
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    extra_tables: Dict[str, pd.DataFrame] = Field(
+        default_factory=dict,
+        description="Additional data tables (e.g., distribution summaries)",
+    )
 
 
 class EngineResults(BaseModel):

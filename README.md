@@ -8,7 +8,7 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 - CSV/Excel ingestion with interactive field mapping prompts.
 - Support for multiple segmentation approaches (all accounts, by account type, by customer segment).
 - Manual capture of the four core assumptions (decay, WAL, deposit beta, repricing beta).
-- Scenario generation for standard parallel rate shocks.
+- Scenario generation for standard parallel rate shocks plus Monte Carlo simulations with configurable volatility and drift.
 - Account-level cash flow projection and present value calculation.
 - CSV report exports (scenario summary, cash flow detail, account-level PV).
 
@@ -37,8 +37,9 @@ The web app renders results in-browser and provides download buttons for summary
 cashflow, and account-level PV CSVs.
 
 ### Supported Scenarios
-Standard parallel shocks now include both rising and falling rate moves from ±100 bps
-through ±400 bps. Additional non-parallel scenarios can be integrated in future phases.
+- Deterministic parallel shocks: rising and falling rate moves from ±100 bps through ±400 bps.
+- Monte Carlo simulations: configurable number of simulations, monthly volatility/drift inputs, and downloadable PV distributions.
+Additional non-parallel scenarios can be integrated in future phases.
 
 ## Project Structure
 ```

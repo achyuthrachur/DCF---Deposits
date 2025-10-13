@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -35,7 +35,7 @@ class ScenarioDefinition(BaseModel):
     description: Optional[str] = Field(
         None, description="Human-readable scenario description"
     )
-    metadata: Dict[str, str] = Field(
+    metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Additional configuration details"
     )
 

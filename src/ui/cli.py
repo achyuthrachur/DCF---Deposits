@@ -153,7 +153,7 @@ def _collect_segments(df: pd.DataFrame, segmentation: str) -> List[str]:
     return segments
 
 
-def _prompt_scenario_selection() -> Dict[str, bool]:
+def _prompt_scenario_selection() -> tuple[Dict[str, bool], Optional[Dict[str, float]]]:
     """Ask user which standard scenarios to run."""
     console.print("\n[bold]Scenario Selection[/bold]")
     scenarios = {
@@ -167,7 +167,27 @@ def _prompt_scenario_selection() -> Dict[str, bool]:
         "parallel_minus_300": typer.confirm("-300 bps parallel shock?", default=False),
         "parallel_minus_400": typer.confirm("-400 bps parallel shock?", default=False),
     }
-    return scenarios
+    monte_carlo_config: Optional[Dict[str, float]] = None
+    if typer.confirm("Run Monte Carlo simulation?", default=False):
+        scenarios["monte_carlo"] = True
+        num_sim = int(
+            typer.prompt("Number of simulations", default="1000")
+        )
+        vol_bps = float(
+            typer.prompt("Monthly volatility (bps)", default="25")
+        )
+        drift_bps = float(
+            typer.prompt("Monthly drift (bps)", default="0")
+        )
+        seed_value = typer.prompt("Random seed (leave blank for random)", default="")
+        monte_carlo_config = {
+            "num_simulations": num_sim,
+            "monthly_volatility": vol_bps / 10000,
+            "monthly_drift": drift_bps / 10000,
+        }
+        if seed_value.strip():
+            monte_carlo_config["random_seed"] = int(seed_value.strip())
+    return scenarios, monte_carlo_config
 
 
 @app.command()
@@ -252,7 +272,16 @@ def run(
     )
     engine.set_base_market_rate_path(base_rate)
 
-    scenario_flags = _prompt_scenario_selection()
+    scenario_flags, monte_carlo_config = _prompt_scenario_selection()
+    if monte_carlo_config:
+        engine.set_monte_carlo_config(
+            num_simulations=int(monte_carlo_config["num_simulations"]),
+            monthly_volatility=float(monte_carlo_config["monthly_volatility"]),
+            monthly_drift=float(monte_carlo_config["monthly_drift"]),
+            random_seed=int(monte_carlo_config["random_seed"])
+            if "random_seed" in monte_carlo_config
+            else None,
+        )
     engine.configure_standard_scenarios(scenario_flags)
 
     console.print("\n[bold]Running projections...[/bold]")

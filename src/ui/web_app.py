@@ -225,7 +225,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
     return assumption_values
 
 
-def _collect_scenarios() -> Dict[str, bool]:
+def _collect_scenarios() -> Tuple[Dict[str, bool], Optional[Dict[str, float]]]:
     """Capture scenario selections from the user."""
     st.markdown("#### Scenario Selection")
     scenario_flags = {"base": True}
@@ -236,7 +236,53 @@ def _collect_scenarios() -> Dict[str, bool]:
             scenario_flags[scenario_id] = st.checkbox(
                 label, value=default, key=f"scenario_{scenario_id}"
             )
-    return scenario_flags
+    monte_carlo_config: Optional[Dict[str, float]] = None
+    with st.expander("Monte Carlo simulation", expanded=False):
+        enable_mc = st.checkbox("Run Monte Carlo simulation", value=False, key="scenario_monte_carlo")
+        st.caption(
+            "Monte Carlo draws apply monthly rate shocks (decimal). "
+            "Results include expected cash flows and PV distribution statistics."
+        )
+        if enable_mc:
+            scenario_flags["monte_carlo"] = True
+            mc_cols = st.columns(4)
+            with mc_cols[0]:
+                num_sim = st.number_input(
+                    "Simulations",
+                    min_value=100,
+                    max_value=10000,
+                    value=1000,
+                    step=100,
+                )
+            with mc_cols[1]:
+                monthly_vol_bps = st.number_input(
+                    "Volatility (bps / month)",
+                    min_value=0.0,
+                    max_value=500.0,
+                    value=25.0,
+                    step=5.0,
+                )
+            with mc_cols[2]:
+                monthly_drift_bps = st.number_input(
+                    "Drift (bps / month)",
+                    min_value=-200.0,
+                    max_value=200.0,
+                    value=0.0,
+                    step=1.0,
+                )
+            with mc_cols[3]:
+                seed_input = st.text_input("Random seed (optional)", value="")
+            monte_carlo_config = {
+                "num_simulations": float(num_sim),
+                "monthly_volatility": monthly_vol_bps / 10000,
+                "monthly_drift": monthly_drift_bps / 10000,
+            }
+            if seed_input.strip():
+                try:
+                    monte_carlo_config["random_seed"] = float(int(seed_input.strip()))
+                except ValueError:
+                    st.warning("Random seed must be an integer. Ignoring input.")
+    return scenario_flags, monte_carlo_config
 
 
 def _download_button(label: str, dataframe: pd.DataFrame, filename: str) -> None:
@@ -332,6 +378,36 @@ def main() -> None:
             margin-bottom: 6px;
             font-weight: 600;
         }
+        .info-band {
+            background: rgba(9, 32, 72, 0.75);
+            border: 1px solid rgba(255, 201, 75, 0.4);
+            border-radius: 22px;
+            padding: 30px 36px;
+            margin-bottom: 32px;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 18px;
+        }
+        .info-card {
+            background: rgba(12, 36, 82, 0.8);
+            border-radius: 16px;
+            padding: 18px 20px;
+            border: 1px solid rgba(255, 201, 75, 0.4);
+        }
+        .info-card h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #ffd66b;
+            margin-bottom: 10px;
+        }
+        .info-card p {
+            font-size: 0.95rem;
+            line-height: 1.5;
+            color: #f2f6ff;
+            margin: 0;
+        }
         .stDataFrame, .stTable {
             background: rgba(255, 255, 255, 0.95) !important;
             border-radius: 12px;
@@ -375,8 +451,8 @@ def main() -> None:
             <p>
                 This interactive engine empowers ALM teams to validate non-maturity deposit assumptions,
                 project monthly cash flows, and quantify economic value of equity (EVE) impacts under
-                multiple rate environments. Upload raw portfolio extracts, tailor behavioral assumptions,
-                and instantly compare scenario-driven valuations.
+                deterministic shocks or Monte Carlo-generated rate paths. Upload raw portfolio extracts,
+                tailor behavioral assumptions, and instantly compare scenario-driven valuations.
             </p>
             <div class="flow-grid">
                 <div class="flow-step">
@@ -394,11 +470,29 @@ def main() -> None:
                 </div>
                 <div class="flow-step">
                     <span>4</span>
-                    Select parallel rate scenarios from ±100 bps to ±400 bps and execute projections.
+                    Run parallel shocks from ±100 bps to ±400 bps or launch Monte Carlo simulations with
+                    user-defined volatility and drift.
                 </div>
                 <div class="flow-step">
                     <span>5</span>
-                    Review dynamic summaries, download cash flow and PV detail, and share results.
+                    Review deterministic and stochastic outputs, download detailed cash flow & PV exhibits,
+                    and share results.
+                </div>
+            </div>
+        </div>
+        <div class="info-band">
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Behavioral Controls</h3>
+                    <p>Segment balances by product or customer cohort, validate decay and WAL coherence, and ensure beta inputs pass reasonableness checks before simulations run.</p>
+                </div>
+                <div class="info-card">
+                    <h3>Valuation Analytics</h3>
+                    <p>Produce monthly principal and interest cash flows, calculate discounted PV and EVE impacts versus the base curve, and export ready-to-share CSV outputs.</p>
+                </div>
+                <div class="info-card">
+                    <h3>Monte Carlo Insights</h3>
+                    <p>Generate stochastic market paths, observe expected cash flow trajectories, and review PV distributions with percentile statistics and raw simulation detail.</p>
                 </div>
             </div>
         </div>
@@ -568,7 +662,7 @@ def main() -> None:
         step=0.005,
     )
 
-    scenario_flags = _collect_scenarios()
+    scenario_flags, monte_carlo_config = _collect_scenarios()
 
     run_clicked = st.button("Run Analysis", type="primary")
     if not run_clicked:
@@ -595,6 +689,15 @@ def main() -> None:
         else:
             engine.set_discount_single_rate(_decimalize(discount_config))
         engine.set_base_market_rate_path(_decimalize(base_rate_input))
+        if monte_carlo_config:
+            engine.set_monte_carlo_config(
+                num_simulations=int(monte_carlo_config["num_simulations"]),
+                monthly_volatility=float(monte_carlo_config["monthly_volatility"]),
+                monthly_drift=float(monte_carlo_config["monthly_drift"]),
+                random_seed=int(monte_carlo_config["random_seed"])
+                if "random_seed" in monte_carlo_config
+                else None,
+            )
         engine.configure_standard_scenarios(scenario_flags)
         results = engine.run_analysis(projection_months=int(projection_months))
     except ValidationError as exc:
@@ -619,27 +722,56 @@ def main() -> None:
         index=0,
     )
     scenario_result = results.scenario_results[selected_scenario]
-    cashflows = scenario_result.cashflows
-    monthly_summary = (
-        cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
-        .sum()
-        .reset_index()
-    )
+    scenario_method = scenario_result.metadata.get("method", "")
 
-    st.markdown(f"### Cash Flow Detail – {selected_scenario}")
-    st.dataframe(monthly_summary)
-    _download_button(
-        f"Download cashflows ({selected_scenario})",
-        cashflows,
-        f"cashflows_{selected_scenario}.csv",
-    )
+    if scenario_method == "monte_carlo":
+        st.markdown(f"### Expected Cash Flow Detail – {selected_scenario}")
+        st.dataframe(scenario_result.cashflows)
+        _download_button(
+            f"Download expected cashflows ({selected_scenario})",
+            scenario_result.cashflows,
+            f"cashflows_{selected_scenario}.csv",
+        )
 
-    account_pv = scenario_result.account_level_pv
-    _download_button(
-        f"Download account-level PV ({selected_scenario})",
-        account_pv,
-        f"account_pv_{selected_scenario}.csv",
-    )
+        st.markdown("### PV Distribution Statistics")
+        st.dataframe(scenario_result.account_level_pv)
+        _download_button(
+            "Download PV statistics",
+            scenario_result.account_level_pv,
+            f"pv_stats_{selected_scenario}.csv",
+        )
+
+        sim_table = scenario_result.extra_tables.get("simulation_pv")
+        if sim_table is not None:
+            st.markdown("### Simulation-Level PV Distribution")
+            st.dataframe(sim_table)
+            _download_button(
+                "Download simulation PV distribution",
+                sim_table,
+                f"pv_distribution_{selected_scenario}.csv",
+            )
+    else:
+        cashflows = scenario_result.cashflows
+        monthly_summary = (
+            cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
+            .sum()
+            .reset_index()
+        )
+
+        st.markdown(f"### Cash Flow Detail – {selected_scenario}")
+        st.dataframe(monthly_summary)
+        _download_button(
+            f"Download cashflows ({selected_scenario})",
+            cashflows,
+            f"cashflows_{selected_scenario}.csv",
+        )
+
+        account_pv = scenario_result.account_level_pv
+        _download_button(
+            f"Download account-level PV ({selected_scenario})",
+            account_pv,
+            f"account_pv_{selected_scenario}.csv",
+        )
 
 
 if __name__ == "__main__":

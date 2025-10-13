@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+
+import numpy as np
 
 from .core.cashflow_projector import CashflowProjector, ProjectionSettings
 from .core.data_loader import DataLoader, LoadResult
@@ -14,7 +16,7 @@ from .core.validator import ValidationError
 from .models.account import AccountRecord
 from .models.assumptions import AssumptionSet, SegmentAssumptions
 from .models.results import EngineResults, ScenarioResult
-from .models.scenario import ScenarioDefinition, ScenarioSet
+from .models.scenario import ScenarioDefinition, ScenarioSet, ScenarioType
 
 
 @dataclass
@@ -37,6 +39,7 @@ class ALMEngine:
         self._discount_config: Optional[DiscountConfig] = None
         self._scenario_set = ScenarioSet()
         self.field_map: Dict[str, str] = {}
+        self._monte_carlo_config: Optional[Dict[str, Any]] = None
 
     # --------------------------------------------------------------------- Data
     def load_data(
@@ -158,7 +161,9 @@ class ALMEngine:
     def configure_standard_scenarios(self, selections: Dict[str, bool]) -> None:
         """Configure the scenario set using standard selections."""
         self._scenario_set = assemble_standard_scenarios(
-            selections=selections, projection_months=self.projection_months
+            selections=selections,
+            projection_months=self.projection_months,
+            monte_carlo_config=self._monte_carlo_config,
         )
 
     def add_scenario(self, scenario: ScenarioDefinition) -> None:
@@ -170,6 +175,26 @@ class ALMEngine:
         if not self._scenario_set.scenarios:
             self.configure_standard_scenarios({"base": True})
         return self._scenario_set
+
+    def set_monte_carlo_config(
+        self,
+        *,
+        num_simulations: int,
+        monthly_volatility: float,
+        monthly_drift: float = 0.0,
+        random_seed: Optional[int] = None,
+    ) -> None:
+        """Configure parameters for Monte Carlo simulations (volatility in decimal form)."""
+        if num_simulations <= 0:
+            raise ValueError("num_simulations must be positive")
+        if monthly_volatility < 0:
+            raise ValueError("monthly_volatility must be non-negative")
+        self._monte_carlo_config = {
+            "num_simulations": int(num_simulations),
+            "monthly_volatility": float(monthly_volatility),
+            "monthly_drift": float(monthly_drift),
+            "random_seed": int(random_seed) if random_seed is not None else None,
+        }
 
     # --------------------------------------------------------------- Execution
     def run_analysis(self, projection_months: Optional[int] = None) -> EngineResults:
@@ -189,16 +214,24 @@ class ALMEngine:
 
         results = EngineResults(base_scenario_id="base")
         for scenario in self.scenario_set().scenarios:
-            cashflows = projector.project(self.accounts, scenario, settings)
-            account_pv = pv_calculator.account_level_pv(cashflows)
-            portfolio_pv = pv_calculator.portfolio_pv(cashflows)
-            scenario_result = ScenarioResult(
-                scenario_id=scenario.scenario_id,
-                cashflows=cashflows,
-                present_value=portfolio_pv,
-                account_level_pv=account_pv,
-                metadata={"method": scenario.scenario_type.value},
-            )
+            if scenario.scenario_type == ScenarioType.MONTE_CARLO:
+                scenario_result = self._run_monte_carlo(
+                    scenario=scenario,
+                    projector=projector,
+                    settings=settings,
+                    pv_calculator=pv_calculator,
+                )
+            else:
+                cashflows = projector.project(self.accounts, scenario, settings)
+                account_pv = pv_calculator.account_level_pv(cashflows)
+                portfolio_pv = pv_calculator.portfolio_pv(cashflows)
+                scenario_result = ScenarioResult(
+                    scenario_id=scenario.scenario_id,
+                    cashflows=cashflows,
+                    present_value=portfolio_pv,
+                    account_level_pv=account_pv,
+                    metadata={"method": scenario.scenario_type.value},
+                )
             results.add_result(scenario_result)
         return results
 
@@ -215,3 +248,101 @@ class ALMEngine:
             raise ValidationError(str(exc)) from exc
         if not self._discount_config:
             raise ValidationError("Discount rate configuration missing.")
+        if self._monte_carlo_config is None:
+            # Nothing to validate unless Monte Carlo requested later.
+            return
+
+    def _run_monte_carlo(
+        self,
+        scenario: ScenarioDefinition,
+        projector: CashflowProjector,
+        settings: ProjectionSettings,
+        pv_calculator: PresentValueCalculator,
+    ) -> ScenarioResult:
+        """Execute Monte Carlo simulations and aggregate results."""
+        import pandas as pd
+
+        config = scenario.metadata
+        num_sim = int(config.get("num_simulations", 0))
+        if num_sim <= 0:
+            raise ValidationError("Monte Carlo configuration requires num_simulations > 0")
+        vol = float(config.get("monthly_volatility", 0.0))
+        drift = float(config.get("monthly_drift", 0.0))
+        seed = config.get("random_seed")
+
+        rng = np.random.default_rng(seed)
+        months = settings.projection_months
+        month_index = np.arange(1, months + 1)
+
+        principal_sum = np.zeros(months)
+        interest_sum = np.zeros(months)
+        total_sum = np.zeros(months)
+        pv_values = np.zeros(num_sim)
+
+        for idx in range(num_sim):
+            monthly_shocks = rng.normal(loc=drift, scale=vol, size=months)
+            cumulative_shock = np.cumsum(monthly_shocks)
+            shock_vector = {int(month): float(shock) for month, shock in zip(month_index, cumulative_shock)}
+            sim_scenario = ScenarioDefinition(
+                scenario_id=f"{scenario.scenario_id}_sim_{idx + 1}",
+                scenario_type=ScenarioType.CUSTOM,
+                shock_vector=shock_vector,
+                description="Monte Carlo simulation path",
+            )
+            cashflows = projector.project(self.accounts, sim_scenario, settings)
+            pv_values[idx] = pv_calculator.portfolio_pv(cashflows)
+            monthly_totals = (
+                cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
+                .sum()
+                .reindex(month_index, fill_value=0.0)
+            )
+            principal_sum += monthly_totals["principal"].to_numpy()
+            interest_sum += monthly_totals["interest"].to_numpy()
+            total_sum += monthly_totals["total_cash_flow"].to_numpy()
+
+        expected_cashflows = pd.DataFrame(
+            {
+                "month": month_index,
+                "expected_principal": principal_sum / num_sim,
+                "expected_interest": interest_sum / num_sim,
+                "expected_total": total_sum / num_sim,
+            }
+        )
+
+        pv_series = pd.Series(pv_values)
+        pv_stats = pd.DataFrame(
+            {
+                "statistic": ["mean", "std", "p05", "p50", "p95", "min", "max"],
+                "value": [
+                    float(pv_series.mean()),
+                    float(pv_series.std(ddof=1) if num_sim > 1 else 0.0),
+                    float(pv_series.quantile(0.05)),
+                    float(pv_series.quantile(0.50)),
+                    float(pv_series.quantile(0.95)),
+                    float(pv_series.min()),
+                    float(pv_series.max()),
+                ],
+            }
+        )
+
+        extra_tables = {
+            "simulation_pv": pd.DataFrame(
+                {"simulation": np.arange(1, num_sim + 1), "present_value": pv_values}
+            )
+        }
+        metadata = {
+            "method": scenario.scenario_type.value,
+            "num_simulations": num_sim,
+            "monthly_volatility": vol,
+            "monthly_drift": drift,
+            "random_seed": seed,
+        }
+
+        return ScenarioResult(
+            scenario_id=scenario.scenario_id,
+            cashflows=expected_cashflows,
+            present_value=float(pv_series.mean()),
+            account_level_pv=pv_stats,
+            metadata=metadata,
+            extra_tables=extra_tables,
+        )

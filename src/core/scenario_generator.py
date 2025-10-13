@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Optional
 
 from ..models.scenario import ScenarioDefinition, ScenarioSet, ScenarioType
 
@@ -31,8 +31,25 @@ def build_base_case(projection_months: int) -> ScenarioDefinition:
     )
 
 
+def build_monte_carlo(
+    projection_months: int, config: Dict[str, Any]
+) -> ScenarioDefinition:
+    """Create a Monte Carlo scenario placeholder with configuration metadata."""
+    metadata = dict(config)
+    metadata["projection_months"] = projection_months
+    return ScenarioDefinition(
+        scenario_id="monte_carlo",
+        scenario_type=ScenarioType.MONTE_CARLO,
+        shock_vector={},
+        description="Monte Carlo stochastic rate simulations",
+        metadata=metadata,
+    )
+
+
 def assemble_standard_scenarios(
-    selections: Dict[str, bool], projection_months: int
+    selections: Dict[str, bool],
+    projection_months: int,
+    monte_carlo_config: Optional[Dict[str, Any]] = None,
 ) -> ScenarioSet:
     """Assemble a scenario set based on user selections."""
     scenario_set = ScenarioSet()
@@ -58,4 +75,6 @@ def assemble_standard_scenarios(
                     scenario_id=scenario_id,
                 )
             )
+    if selections.get("monte_carlo", False) and monte_carlo_config:
+        scenario_set.add(build_monte_carlo(projection_months, monte_carlo_config))
     return scenario_set
