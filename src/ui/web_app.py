@@ -408,6 +408,22 @@ def main() -> None:
             color: #f2f6ff;
             margin: 0;
         }
+        .stApp label,
+        .stApp [data-testid="stMarkdown"] p,
+        .stApp [data-testid="stMarkdown"] li,
+        .stApp [data-testid="stCaption"] {
+            color: #f6f9ff !important;
+        }
+        .stApp [data-testid="stMarkdown"] small {
+            color: rgba(235, 240, 255, 0.8) !important;
+        }
+        .stApp input,
+        .stApp textarea {
+            color: #0f2d63 !important;
+        }
+        .stApp div[data-baseweb="select"] span {
+            color: #0f2d63 !important;
+        }
         .stDataFrame, .stTable {
             background: rgba(255, 255, 255, 0.95) !important;
             border-radius: 12px;
