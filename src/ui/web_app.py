@@ -411,13 +411,14 @@ def main() -> None:
         .stApp label,
         .stApp [data-testid="stMarkdown"] p,
         .stApp [data-testid="stMarkdown"] li,
-        .stApp [data-testid="stCaption"] {
+        .stApp [data-testid="stCaption"],
+        .stApp .stNumberInput label,
+        .stApp .stRadio label,
+        .stApp .stCheckbox label {
             color: #f6f9ff !important;
         }
-        .stApp [data-testid="stMarkdown"] small {
-            color: rgba(235, 240, 255, 0.8) !important;
-        }
-        .stApp input,
+        .stApp .stNumberInput input,
+        .stApp .stTextInput input,
         .stApp textarea {
             color: #0f2d63 !important;
         }
@@ -723,13 +724,22 @@ def main() -> None:
         st.error(f"Unexpected error: {exc}")
         return
 
+
     st.session_state["run_results"] = results
 
-    st.success("Analysis complete!")
+    # Progress indicator for analysis runtime
+    progress_text = st.empty()
+    progress_bar = st.progress(0)
+
+    progress_text.markdown("**Running deterministic scenarios...**")
     summary_df = results.summary_frame()
+    progress_bar.progress(50)
+
+    progress_text.markdown("**Preparing detailed outputs...**")
     st.markdown("### Scenario Present Value Summary")
     st.dataframe(summary_df)
     _download_button("Download summary CSV", summary_df, "eve_summary.csv")
+    progress_bar.progress(75)
 
     scenario_ids = list(results.scenario_results.keys())
     selected_scenario = st.selectbox(
@@ -748,6 +758,7 @@ def main() -> None:
             scenario_result.cashflows,
             f"cashflows_{selected_scenario}.csv",
         )
+        progress_bar.progress(85)
 
         st.markdown("### PV Distribution Statistics")
         st.dataframe(scenario_result.account_level_pv)
@@ -756,6 +767,7 @@ def main() -> None:
             scenario_result.account_level_pv,
             f"pv_stats_{selected_scenario}.csv",
         )
+        progress_bar.progress(92)
 
         sim_table = scenario_result.extra_tables.get("simulation_pv")
         if sim_table is not None:
@@ -766,6 +778,7 @@ def main() -> None:
                 sim_table,
                 f"pv_distribution_{selected_scenario}.csv",
             )
+        progress_bar.progress(100)
     else:
         cashflows = scenario_result.cashflows
         monthly_summary = (
@@ -788,6 +801,10 @@ def main() -> None:
             account_pv,
             f"account_pv_{selected_scenario}.csv",
         )
+        progress_bar.progress(100)
+
+    progress_text.empty()
+    st.success("Analysis complete!")
 
 
 if __name__ == "__main__":
