@@ -416,12 +416,13 @@ def main() -> None:
         .stApp [data-testid="stMarkdown"] p,
         .stApp [data-testid="stMarkdown"] li,
         .stApp [data-testid="stCaption"],
-        .stApp .stNumberInput label,
-        .stApp .stRadio label,
-        .stApp .stCheckbox label,
+        .stApp [data-testid="stNumberInputLabel"] p,
+        .stApp [data-testid="stRadio"] label div p,
+        .stApp [data-testid="stRadio"] label div span,
+        .stApp [data-testid="stCheckbox"] label div p,
+        .stApp [data-testid="stCheckbox"] label div span,
         .stApp [data-testid="stExpander"] button p,
-        .stApp div[role="radiogroup"] label span,
-        .stApp div[data-baseweb="checkbox"] label span {
+        .stApp [data-testid="stExpander"] button span {
             color: #f6f9ff !important;
         }
         .stApp .stNumberInput input,
