@@ -7,4 +7,5 @@ from .monte_carlo_plots import (  # noqa: F401
     plot_rate_confidence_fan,
     plot_rate_path_spaghetti,
     create_monte_carlo_dashboard,
+    create_rate_path_animation,
 )

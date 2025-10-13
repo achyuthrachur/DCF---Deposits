@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
 
 def extract_monte_carlo_data(
@@ -73,20 +74,21 @@ def plot_rate_path_spaghetti(
 ) -> plt.Figure:
     """Create a spaghetti plot of simulated rate paths."""
 
-    if rate_sample is None or rate_summary is None:
-        raise ValueError("Rate sample and summary data are required")
+    if rate_summary is None:
+        raise ValueError("Rate summary data is required")
 
     months = np.arange(1, rate_summary.shape[0] + 1)
     fig, ax = _setup_figure(figsize=(12, 7))
 
     # Convert sample to numpy for plotting
-    sample_paths = rate_sample.drop(columns="simulation").to_numpy()
-    for path in sample_paths:
-        ax.plot(months, path * 100, color="steelblue", alpha=0.08, linewidth=0.6)
+    if rate_sample is not None:
+        sample_paths = rate_sample.drop(columns="simulation").to_numpy()
+        for path in sample_paths:
+            ax.plot(months, path * 100, color="steelblue", alpha=0.08, linewidth=0.6)
 
     ax.plot(months, rate_summary["mean"].to_numpy() * 100, color="navy", linewidth=2.5, label="Mean")
-    ax.plot(months, rate_summary["p05"].to_numpy() * 100, color="darkred", linestyle="--", linewidth=1.5, label="P5 / P95")
-    ax.plot(months, rate_summary["p95"].to_numpy() * 100, color="darkred", linestyle="--", linewidth=1.5)
+    ax.plot(months, rate_summary["p05"].to_numpy() * 100, color="darkred", linestyle="--", linewidth=1.5, label="5th Percentile")
+    ax.plot(months, rate_summary["p95"].to_numpy() * 100, color="darkred", linestyle="--", linewidth=1.5, label="95th Percentile")
     ax.fill_between(
         months,
         rate_summary["p05"].to_numpy() * 100,
@@ -121,20 +123,20 @@ def plot_rate_confidence_fan(
     fig, ax = _setup_figure(figsize=(12, 7))
 
     bands = [
-        ("p01", "p99", 0.1, "#cfe2f3"),
-        ("p05", "p95", 0.2, "#9fc5e8"),
-        ("p10", "p90", 0.3, "#6fa8dc"),
-        ("p25", "p75", 0.4, "#3d85c6"),
+        ("p01", "p99", 0.1, "#cfe2f3", "1st-99th"),
+        ("p05", "p95", 0.2, "#9fc5e8", "5th-95th"),
+        ("p10", "p90", 0.3, "#6fa8dc", "10th-90th"),
+        ("p25", "p75", 0.4, "#3d85c6", "25th-75th"),
     ]
 
-    for lower, upper, alpha, color in bands:
+    for lower, upper, alpha, color, label in bands:
         ax.fill_between(
             months,
             rate_summary[lower].to_numpy() * 100,
             rate_summary[upper].to_numpy() * 100,
             color=color,
             alpha=alpha,
-            label=f"{lower.upper()} - {upper.upper()}",
+            label=f"{label} percentile band",
         )
 
     ax.plot(months, rate_summary["p50"].to_numpy() * 100, color="navy", linewidth=2.5, label="Median")
@@ -162,17 +164,16 @@ def plot_portfolio_pv_distribution(
     if pv_distribution is None or pv_distribution.empty:
         raise ValueError("PV distribution data is required")
 
-    values = pv_distribution["present_value"].to_numpy() / 1e6
+    values = pv_distribution["present_value"].to_numpy()
     fig, ax = _setup_figure(figsize=(12, 6))
     counts, bins, patches = ax.hist(values, bins=60, color="#4f81bd", alpha=0.75, edgecolor="black")
 
     # Highlight risk zones
     if book_value:
-        book_millions = book_value / 1e6
         for patch, left in zip(patches, bins[:-1]):
-            if left + patch.get_width() < book_millions * 0.95:
+            if left + patch.get_width() < book_value * 0.95:
                 patch.set_facecolor("#c0504d")
-            elif left > book_millions:
+            elif left > book_value:
                 patch.set_facecolor("#9bbb59")
 
     def _annotate_line(x_val, label, color):
@@ -180,18 +181,24 @@ def plot_portfolio_pv_distribution(
         ax.text(x_val, ax.get_ylim()[1] * 0.9, label, rotation=90, color=color, ha="right", va="top")
 
     if book_value:
-        _annotate_line(book_value / 1e6, "Book Value", "black")
+        _annotate_line(book_value, "Book Value", "black")
     if base_case_pv:
-        _annotate_line(base_case_pv / 1e6, "Base Case PV", "orange")
+        _annotate_line(base_case_pv, "Base Case PV", "orange")
     if percentiles:
         for key, color in [("p5", "red"), ("p50", "navy"), ("p95", "green")]:
             if key in percentiles:
-                _annotate_line(percentiles[key] / 1e6, key.upper(), color)
+                label = {
+                    "p5": "5th percentile",
+                    "p50": "Median",
+                    "p95": "95th percentile",
+                }.get(key, key.upper())
+                _annotate_line(percentiles[key], label, color)
 
-    ax.set_xlabel("Portfolio PV ($ millions)")
+    ax.set_xlabel("Portfolio PV ($)")
     ax.set_ylabel("Frequency")
     ax.set_title(title, fontsize=14, fontweight="bold")
     ax.grid(True, alpha=0.3, axis="y")
+    ax.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
     fig.tight_layout()
     return fig
 
@@ -209,8 +216,19 @@ def plot_percentile_ladder(
         raise ValueError("Percentile metrics are required")
 
     order = ["p1", "p5", "p10", "p25", "p50", "p75", "p90", "p95", "p99"]
-    labels = [s.upper() for s in order if s in percentiles]
-    values = [percentiles[s] / 1e6 for s in order if s in percentiles]
+    percentile_labels = {
+        "p1": "1st percentile",
+        "p5": "5th percentile",
+        "p10": "10th percentile",
+        "p25": "25th percentile",
+        "p50": "Median (50th)",
+        "p75": "75th percentile",
+        "p90": "90th percentile",
+        "p95": "95th percentile",
+        "p99": "99th percentile",
+    }
+    labels = [percentile_labels[s] for s in order if s in percentiles]
+    values = [percentiles[s] for s in order if s in percentiles]
 
     fig, ax = _setup_figure(figsize=(8, 6))
     y_pos = np.arange(len(values))
@@ -219,15 +237,16 @@ def plot_percentile_ladder(
     ax.set_yticklabels(labels)
 
     if book_value:
-        ax.axvline(book_value / 1e6, color="black", linestyle="--", linewidth=2, label="Book Value")
+        ax.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book Value")
     if base_case_pv:
-        ax.axvline(base_case_pv / 1e6, color="orange", linestyle=":", linewidth=2, label="Base Case")
+        ax.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Base Case")
 
-    ax.set_xlabel("Portfolio PV ($ millions)")
+    ax.set_xlabel("Portfolio PV ($)")
     ax.set_title(title, fontsize=13, fontweight="bold")
     if book_value or base_case_pv:
         ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3, axis="x")
+    ax.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
     fig.tight_layout()
     return fig
 
@@ -247,72 +266,82 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
 
     plt.style.use("seaborn-v0_8")
     fig = plt.figure(figsize=(18, 11))
-    gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.35, wspace=0.3)
+    gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.4, wspace=0.35)
 
     # Top-left: Spaghetti plot
     ax1 = fig.add_subplot(gs[0, :2])
     months = np.arange(1, rate_summary.shape[0] + 1)
     if rate_sample is not None:
         for path in rate_sample.drop(columns="simulation").to_numpy():
-            ax1.plot(months, path * 100, color="steelblue", alpha=0.06, linewidth=0.6)
-    ax1.plot(months, rate_summary["mean"].to_numpy() * 100, color="navy", linewidth=2.5, label="Mean")
+            ax1.plot(months, path * 100, color="steelblue", alpha=0.05, linewidth=0.6)
+    ax1.plot(months, rate_summary["mean"].to_numpy() * 100, color="navy", linewidth=2.5, label="Mean path")
     ax1.fill_between(
         months,
         rate_summary["p05"].to_numpy() * 100,
         rate_summary["p95"].to_numpy() * 100,
-        color="salmon",
-        alpha=0.25,
-        label="90% Confidence",
+        color="#f4cccc",
+        alpha=0.35,
+        label="90% confidence band",
     )
-    ax1.plot(months, rate_summary["base_rate"].to_numpy() * 100, color="orange", linewidth=2, label="Base Case")
-    ax1.set_title("Interest Rate Paths", fontweight="bold")
+    ax1.plot(months, rate_summary["base_rate"].to_numpy() * 100, color="orange", linewidth=2, label="Deterministic base")
+    ax1.set_title("Interest rate scenarios", fontweight="bold")
     ax1.set_xlabel("Month")
     ax1.set_ylabel("Rate (%)")
     ax1.legend(loc="best")
     ax1.grid(True, alpha=0.3)
 
-    # Top-right: Risk gauge
+    # Top-right: Risk gauge with explanation
     ax2 = fig.add_subplot(gs[0, 2])
     ax2.axis("off")
     if book_value and percentiles:
         p5 = percentiles.get("p5")
         if p5:
-            shortfall_pct = max(0.0, (book_value - p5) / book_value * 100)
-            color = "#9bbb59"
-            if shortfall_pct > 15:
-                color = "#c0504d"
-            elif shortfall_pct > 5:
-                color = "#f1c232"
-            ax2.text(0.5, 0.65, f"{shortfall_pct:.1f}%", fontsize=42, ha="center", fontweight="bold", color=color)
-            ax2.text(0.5, 0.35, "P5 Shortfall vs. Book", ha="center", fontsize=12)
-    ax2.set_title("Risk Gauge", fontweight="bold")
+            shortfall = book_value - p5
+            shortfall_pct = max(0.0, shortfall / book_value * 100)
+            color = "#4f9d69" if shortfall_pct <= 5 else "#f6c343" if shortfall_pct <= 15 else "#c94c4c"
+            ax2.text(0.5, 0.7, f"${shortfall:,.0f}", fontsize=24, ha="center", fontweight="bold", color=color)
+            ax2.text(0.5, 0.52, f"Shortfall vs. book value (5th percentile)", ha="center", fontsize=11)
+            ax2.text(0.5, 0.35, f"Equivalent to {shortfall_pct:.1f}% of current balance", ha="center", fontsize=10)
+    ax2.set_title("Risk insight", fontweight="bold")
 
     # Middle row: PV distribution
     ax3 = fig.add_subplot(gs[1, :2])
-    values = pv_distribution["present_value"].to_numpy() / 1e6
-    ax3.hist(values, bins=50, color="#4f81bd", alpha=0.75, edgecolor="black")
+    values = pv_distribution["present_value"].to_numpy()
+    ax3.hist(values, bins=60, color="#4f81bd", alpha=0.75, edgecolor="black")
     if book_value:
-        ax3.axvline(book_value / 1e6, color="black", linestyle="--", linewidth=2, label="Book Value")
+        ax3.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
     if base_case_pv:
-        ax3.axvline(base_case_pv / 1e6, color="orange", linestyle=":", linewidth=2, label="Base Case")
+        ax3.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Deterministic base PV")
     if percentiles:
-        for key, color in [("p5", "red"), ("p50", "navy"), ("p95", "green")]:
+        for key, color, label in [
+            ("p5", "red", "5th percentile"),
+            ("p50", "navy", "Median"),
+            ("p95", "green", "95th percentile"),
+        ]:
             if key in percentiles:
-                ax3.axvline(percentiles[key] / 1e6, color=color, linestyle="-", linewidth=1.8, label=key.upper())
-    ax3.set_title("Portfolio PV Distribution", fontweight="bold")
-    ax3.set_xlabel("PV ($ millions)")
-    ax3.set_ylabel("Frequency")
+                ax3.axvline(percentiles[key], color=color, linestyle="-", linewidth=1.8, label=label)
+    ax3.set_title("Distribution of portfolio PV", fontweight="bold")
+    ax3.set_xlabel("Present value ($)")
+    ax3.set_ylabel("Number of simulations")
+    ax3.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
     ax3.legend(loc="best")
-    ax3.grid(True, alpha=0.3, axis="y")
+    ax3.grid(True, alpha=0.25, axis="y")
 
-    # Middle-right: Percentile table
+    # Middle-right: Percentile table with descriptions
     ax4 = fig.add_subplot(gs[1, 2])
     ax4.axis("off")
     if percentiles:
-        rows = [["Percentile", "Value ($M)"]]
-        for key in ["p1", "p5", "p10", "p50", "p90", "p95", "p99"]:
+        rows = [["Statistic", "Value ($)"]]
+        for key, label in [
+            ("mean", "Mean"),
+            ("p50", "Median (50th percentile)"),
+            ("p5", "5th percentile"),
+            ("p95", "95th percentile"),
+            ("min", "Minimum"),
+            ("max", "Maximum"),
+        ]:
             if key in percentiles:
-                rows.append([key.upper(), f"{percentiles[key] / 1e6:,.0f}"])
+                rows.append([label, f"{percentiles[key]:,.0f}"])
         table = ax4.table(cellText=rows, cellLoc="left", loc="center")
         table.auto_set_font_size(False)
         table.set_fontsize(10)
@@ -320,73 +349,198 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         for i in range(2):
             table[(0, i)].set_facecolor("#4f81bd")
             table[(0, i)].set_text_props(color="white", fontweight="bold")
-    ax4.set_title("PV Percentiles", fontweight="bold")
+    ax4.set_title("Key PV metrics", fontweight="bold")
 
     # Bottom-left: Percentile ladder
     ax5 = fig.add_subplot(gs[2, 0])
     if percentiles:
-        y_labels = ["P1", "P5", "P10", "P25", "P50", "P75", "P90", "P95", "P99"]
-        vals = [percentiles.get(k.lower(), np.nan) / 1e6 for k in y_labels]
-        mask = ~np.isnan(vals)
-        y = np.arange(len(y_labels))[mask]
-        ax5.barh(y, np.array(vals)[mask], color="#4f81bd", alpha=0.7)
+        order = ["p1", "p5", "p10", "p25", "p50", "p75", "p90", "p95", "p99"]
+        percentile_labels = {
+            "p1": "1st percentile",
+            "p5": "5th percentile",
+            "p10": "10th percentile",
+            "p25": "25th percentile",
+            "p50": "Median (50th)",
+            "p75": "75th percentile",
+            "p90": "90th percentile",
+            "p95": "95th percentile",
+            "p99": "99th percentile",
+        }
+        labels = [percentile_labels[s] for s in order if s in percentiles]
+        values = [percentiles[s] for s in order if s in percentiles]
+        y_pos = np.arange(len(values))
+        ax5.barh(y_pos, values, color="#4f81bd", alpha=0.75)
+        ax5.set_yticks(y_pos)
+        ax5.set_yticklabels(labels)
         if book_value:
-            ax5.axvline(book_value / 1e6, color="black", linestyle="--", linewidth=2, label="Book")
+            ax5.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
         if base_case_pv:
-            ax5.axvline(base_case_pv / 1e6, color="orange", linestyle=":", linewidth=2, label="Base")
-        ax5.set_yticks(y)
-        ax5.set_yticklabels(np.array(y_labels)[mask])
-        ax5.set_xlabel("PV ($ millions)")
-        ax5.set_title("Percentile Ladder", fontweight="bold")
+            ax5.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Base case PV")
+        ax5.set_xlabel("Present value ($)")
+        ax5.set_title("Percentile ladder", fontweight="bold")
+        ax5.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
         if book_value or base_case_pv:
             ax5.legend(loc="lower right")
         ax5.grid(True, alpha=0.3, axis="x")
     else:
         ax5.axis("off")
 
-    # Bottom-middle: Scenario comparison
+    # Bottom-middle: Scenario comparison (full values)
     ax6 = fig.add_subplot(gs[2, 1])
     if percentiles and base_case_pv:
         bars = [
-            ("Base", base_case_pv / 1e6, "orange"),
-            ("P5", percentiles.get("p5", np.nan) / 1e6, "#c0504d"),
-            ("P50", percentiles.get("p50", np.nan) / 1e6, "#4f81bd"),
-            ("P95", percentiles.get("p95", np.nan) / 1e6, "#9bbb59"),
+            ("Base case", base_case_pv, "orange"),
+            ("5th percentile", percentiles.get("p5", np.nan), "#c0504d"),
+            ("Median", percentiles.get("p50", np.nan), "#4f81bd"),
+            ("95th percentile", percentiles.get("p95", np.nan), "#9bbb59"),
         ]
-        labels, values, colors = zip(*[(l, v, c) for l, v, c in bars if not np.isnan(v)])
-        rects = ax6.bar(labels, values, color=colors, alpha=0.8, edgecolor="black")
-        if book_value:
-            ax6.axhline(book_value / 1e6, color="black", linestyle="--", linewidth=2)
-        for rect in rects:
-            height = rect.get_height()
-            ax6.text(rect.get_x() + rect.get_width() / 2, height, f"${height:,.0f}M", ha="center", va="bottom")
-        ax6.set_ylabel("PV ($ millions)")
-        ax6.set_title("Scenario Comparison", fontweight="bold")
-        ax6.grid(True, alpha=0.3, axis="y")
+        filtered = [(l, v, c) for l, v, c in bars if not np.isnan(v)]
+        if filtered:
+            labels, values, colors = zip(*filtered)
+            rects = ax6.bar(labels, values, color=colors, alpha=0.85, edgecolor="black")
+            if book_value:
+                ax6.axhline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
+            for rect, val in zip(rects, values):
+                ax6.text(rect.get_x() + rect.get_width() / 2, val, f"${val:,.0f}", ha="center", va="bottom")
+            ax6.set_ylabel("Present value ($)")
+            ax6.set_title("Scenarios vs. Monte Carlo percentiles", fontweight="bold")
+            ax6.set_xticklabels(labels, rotation=15)
+            ax6.yaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
+            ax6.grid(True, alpha=0.3, axis="y")
+            ax6.legend(loc="best")
+        else:
+            ax6.axis("off")
     else:
         ax6.axis("off")
 
-    # Bottom-right: Distribution stats
+    # Bottom-right: Narrative summary
     ax7 = fig.add_subplot(gs[2, 2])
     ax7.axis("off")
+    narrative_lines = []
     if percentiles:
-        stats = [
-            f"Simulations: {len(pv_distribution):,}",
-            f"Mean: ${percentiles['mean']/1e6:,.0f}M",
-            f"Median: ${percentiles.get('p50', np.nan)/1e6:,.0f}M",
-            f"Std Dev: ${percentiles['std']/1e6:,.0f}M",
-            f"P5: ${percentiles.get('p5', np.nan)/1e6:,.0f}M",
-            f"P95: ${percentiles.get('p95', np.nan)/1e6:,.0f}M",
-        ]
-        ax7.text(0.05, 0.9, "Key Metrics", fontsize=12, fontweight="bold")
-        for idx, line in enumerate(stats):
-            ax7.text(0.05, 0.7 - idx * 0.12, line, fontsize=10)
+        median = percentiles.get("p50")
+        p5 = percentiles.get("p5")
+        p95 = percentiles.get("p95")
+        if book_value and median:
+            delta = median - book_value
+            direction = "higher" if delta >= 0 else "lower"
+            narrative_lines.append(
+                f"Median PV: ${median:,.0f} ({abs(delta):,.0f} {direction} than book value)"
+            )
+        if p5 and p95:
+            narrative_lines.append(
+                f"Central 90% range: ${p5:,.0f} to ${p95:,.0f}"
+            )
+        if percentiles.get("std"):
+            narrative_lines.append(
+                f"Standard deviation across simulations: ${percentiles['std']:,.0f}"
+            )
+    if not narrative_lines:
+        narrative_lines.append("Monte Carlo summary unavailable.")
+    y = 0.9
+    ax7.text(0.05, y, "Interpretation", fontsize=12, fontweight="bold")
+    for line in narrative_lines:
+        y -= 0.12
+        ax7.text(0.05, y, line, fontsize=10)
 
     fig.suptitle("Monte Carlo ALM Dashboard", fontsize=16, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     return fig
 
 
+def create_rate_path_animation(
+    rate_sample: Optional[pd.DataFrame],
+    rate_summary: pd.DataFrame,
+) -> go.Figure:
+    """Create an animated Plotly figure showing rate path evolution."""
+
+    if rate_summary is None:
+        raise ValueError("Rate summary data is required for animation")
+
+    months = rate_summary["month"].to_numpy()
+    mean_path = rate_summary["mean"].to_numpy() * 100
+    base_path = rate_summary["base_rate"].to_numpy() * 100
+    p5 = rate_summary["p05"].to_numpy() * 100
+    p95 = rate_summary["p95"].to_numpy() * 100
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=months[:1],
+            y=mean_path[:1],
+            mode="lines",
+            name="Mean path",
+            line=dict(color="#003f5c", width=3),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=months[:1],
+            y=base_path[:1],
+            mode="lines",
+            name="Base case",
+            line=dict(color="#ffa600", width=2, dash="dash"),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=np.concatenate([months[:1], months[:1][::-1]]),
+            y=np.concatenate([p95[:1], p5[:1][::-1]]),
+            fill="toself",
+            fillcolor="rgba(244,204,204,0.4)",
+            line=dict(color="rgba(244,204,204,0.0)"),
+            hoverinfo="skip",
+            name="5th-95th band",
+        )
+    )
+
+    frames = []
+    for i in range(1, len(months)):
+        frame_data = [
+            go.Scatter(x=months[: i + 1], y=mean_path[: i + 1], mode="lines", line=dict(color="#003f5c", width=3)),
+            go.Scatter(x=months[: i + 1], y=base_path[: i + 1], mode="lines", line=dict(color="#ffa600", width=2, dash="dash")),
+            go.Scatter(
+                x=np.concatenate([months[: i + 1], months[: i + 1][::-1]]),
+                y=np.concatenate([p95[: i + 1], p5[: i + 1][::-1]]),
+                fill="toself",
+                fillcolor="rgba(244,204,204,0.4)",
+                line=dict(color="rgba(244,204,204,0.0)"),
+                hoverinfo="skip",
+            ),
+        ]
+        frames.append(go.Frame(data=frame_data, name=str(months[i])))
+
+    fig.frames = frames
+    fig.update_layout(
+        title="Evolution of interest rate paths",
+        xaxis_title="Month",
+        yaxis_title="Interest rate (%)",
+        template="plotly_white",
+        updatemenus=[
+            dict(
+                type="buttons",
+                showactive=False,
+                buttons=[
+                    dict(label="Play", method="animate", args=[None, {"frame": {"duration": 120, "redraw": True}, "fromcurrent": True}]),
+                    dict(label="Pause", method="animate", args=[[None], {"frame": {"duration": 0}, "mode": "immediate", "transition": {"duration": 0}}]),
+                ],
+            )
+        ],
+        sliders=[
+            dict(
+                steps=[
+                    dict(method="animate", args=[[str(m)]], label=f"Month {m}")
+                    for m in months
+                ],
+                transition=dict(duration=0),
+                x=0.05,
+                len=0.9,
+            )
+        ],
+    )
+
+    return fig
 def save_figure(fig: plt.Figure, output_path: Path) -> Path:
     """Persist matplotlib figure to disk."""
 
@@ -394,4 +548,3 @@ def save_figure(fig: plt.Figure, output_path: Path) -> Path:
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return output_path
-

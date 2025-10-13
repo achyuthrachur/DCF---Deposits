@@ -281,10 +281,7 @@ class ALMEngine:
                     )
                     emit_progress(
                         progress_value,
-                        (
-                            f"Scenario {index}/{total_scenarios}: "
-                            f"simulation {sim_idx}/{sim_total}"
-                        ),
+                        f"Scenario {index}/{total_scenarios}: simulation {sim_idx}/{sim_total}",
                     )
 
                 scenario_result = self._run_monte_carlo(
@@ -301,10 +298,6 @@ class ALMEngine:
                     simulation_callback=simulation_progress,
                 )
                 current_step += scenario_steps
-                emit_progress(
-                    current_step,
-                    f"Scenario {index}/{total_scenarios}: {scenario_label} complete",
-                )
             else:
                 step_offset = current_step
 
@@ -339,10 +332,6 @@ class ALMEngine:
                     metadata={"method": scenario.scenario_type.value},
                 )
                 current_step += scenario_steps
-                emit_progress(
-                    current_step,
-                    f"Scenario {index}/{total_scenarios}: {scenario_label} complete",
-                )
             results.add_result(scenario_result)
 
         if (
@@ -517,17 +506,10 @@ class ALMEngine:
                         pass
 
             if progress_callback:
-                try:
-                    progress_callback(
-                        min(total_steps, sim_offset + total_accounts),
-                        total_steps,
-                        (
-                            f"Scenario {scenario_index}/{total_scenarios}: "
-                            f"simulation {idx + 1}/{num_sim} complete"
-                        ),
-                    )
-                except Exception:  # pragma: no cover
-                    pass
+                emit_progress(
+                    min(total_steps, sim_offset + total_accounts),
+                    f"Scenario {scenario_index}/{total_scenarios}: simulation {idx + 1}/{num_sim}",
+                )
 
             pv_values[idx] = pv_calculator.portfolio_pv(cashflows)
             monthly_totals = (

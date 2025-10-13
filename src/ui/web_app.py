@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import io
 import sys
-import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -20,9 +18,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
-from src.reporting.report_generator import ReportGenerator
 from src.visualization import (
     create_monte_carlo_dashboard,
+    create_rate_path_animation,
     extract_monte_carlo_data,
     plot_percentile_ladder,
     plot_portfolio_pv_distribution,
@@ -458,6 +456,14 @@ def main() -> None:
         .stApp div[data-baseweb="select"] input {
             color: #0f2d63 !important;
         }
+        .stApp .stFormSubmitButton > button {
+            background: linear-gradient(135deg, #ffc94b, #f0a500);
+            color: #0b1d3a !important;
+            font-weight: 700 !important;
+            border: none;
+            border-radius: 999px;
+            padding: 0.5rem 1.6rem;
+        }
         .stApp .stButton > button,
         .stApp .stDownloadButton > button {
             background: linear-gradient(135deg, #ffc94b, #f0a500);
@@ -859,25 +865,13 @@ def main() -> None:
             st.pyplot(fig)
             dashboard = create_monte_carlo_dashboard(viz_data)
             st.pyplot(dashboard)
-
-            with st.expander("Download Monte Carlo visualisations"):
-                if st.button("Generate and download charts", key="download_mc_plots"):
-                    generator = ReportGenerator()
-                    files = generator.export_monte_carlo_visuals(
-                        results, scenario_id=selected_scenario, prefix=selected_scenario
-                    )
-                    if files:
-                        buffer = io.BytesIO()
-                        with zipfile.ZipFile(buffer, "w") as zf:
-                            for name, path in files.items():
-                                zf.write(path, arcname=Path(path).name)
-                        buffer.seek(0)
-                        st.download_button(
-                            label="Download ZIP",
-                            data=buffer,
-                            file_name=f"{selected_scenario}_visuals.zip",
-                            mime="application/zip",
-                        )
+            try:
+                animation_fig = create_rate_path_animation(
+                    viz_data["rate_sample"], viz_data["rate_summary"]
+                )
+                st.plotly_chart(animation_fig, use_container_width=True, key="mc_animation")
+            except Exception:
+                pass
     else:
         cashflows = scenario_result.cashflows
         monthly_summary = (
