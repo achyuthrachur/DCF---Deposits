@@ -726,7 +726,22 @@ def main() -> None:
                 else None,
             )
         engine.configure_standard_scenarios(scenario_flags)
-        results = engine.run_analysis(projection_months=int(projection_months))
+        scenario_plan = engine.scenario_set().scenarios
+        total_scenarios = max(len(scenario_plan), 1)
+        progress_text = st.empty()
+        progress_bar = st.progress(5)
+
+        def progress_callback(index: int, total: int, scenario) -> None:
+            label = scenario.description or scenario.scenario_id
+            pct = min(70, int(5 + (index / max(total, 1)) * 60))
+            progress_text.markdown(f"**Running scenario {index}/{total}: {label}...**")
+            progress_bar.progress(pct)
+
+        with st.spinner("Executing cash flow projections..."):
+            results = engine.run_analysis(
+                projection_months=int(projection_months),
+                progress_callback=progress_callback,
+            )
     except ValidationError as exc:
         st.error(f"Validation error during execution: {exc}")
         return
@@ -737,19 +752,15 @@ def main() -> None:
 
     st.session_state["run_results"] = results
 
-    # Progress indicator for analysis runtime
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-
-    progress_text.markdown("**Running deterministic scenarios...**")
+    progress_text.markdown("**Preparing summary metrics...**")
     summary_df = results.summary_frame()
-    progress_bar.progress(50)
+    progress_bar.progress(80)
 
-    progress_text.markdown("**Preparing detailed outputs...**")
+    progress_text.markdown("**Rendering detailed outputs...**")
     st.markdown("### Scenario Present Value Summary")
     st.dataframe(summary_df)
     _download_button("Download summary CSV", summary_df, "eve_summary.csv")
-    progress_bar.progress(75)
+    progress_bar.progress(85)
 
     scenario_ids = list(results.scenario_results.keys())
     selected_scenario = st.selectbox(
@@ -815,7 +826,6 @@ def main() -> None:
 
     progress_text.empty()
     st.success("Analysis complete!")
-
 
 if __name__ == "__main__":
     main()

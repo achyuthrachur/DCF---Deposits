@@ -197,7 +197,13 @@ class ALMEngine:
         }
 
     # --------------------------------------------------------------- Execution
-    def run_analysis(self, projection_months: Optional[int] = None) -> EngineResults:
+    def run_analysis(
+        self,
+        projection_months: Optional[int] = None,
+        progress_callback: Optional[
+            callable
+        ] = None,
+    ) -> EngineResults:
         """Execute the projection engine for all configured scenarios."""
         if projection_months:
             self.projection_months = projection_months
@@ -212,8 +218,16 @@ class ALMEngine:
         discount_curve = self.discount_curve()
         pv_calculator = PresentValueCalculator(discount_curve)
 
+        scenario_plan = self.scenario_set().scenarios
+        total_scenarios = len(scenario_plan)
+
         results = EngineResults(base_scenario_id="base")
-        for scenario in self.scenario_set().scenarios:
+        for index, scenario in enumerate(scenario_plan, start=1):
+            if progress_callback:
+                try:
+                    progress_callback(index, total_scenarios, scenario)
+                except Exception:  # pragma: no cover - guard rail
+                    pass
             if scenario.scenario_type == ScenarioType.MONTE_CARLO:
                 scenario_result = self._run_monte_carlo(
                     scenario=scenario,
