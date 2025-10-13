@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -224,22 +224,40 @@ class ALMEngine:
         pv_calculator = PresentValueCalculator(discount_curve)
 
         scenario_plan = self.scenario_set().scenarios
-        total_scenarios = len(scenario_plan)
         total_accounts = max(len(self.accounts), 1)
-        total_steps = max(total_scenarios * total_accounts, 1)
+
+        # Determine total progress steps (per account, per simulation).
+        scenario_step_info: List[tuple[ScenarioDefinition, int]] = []
+        total_steps = 0
+        for scenario in scenario_plan:
+            if scenario.scenario_type == ScenarioType.MONTE_CARLO:
+                num_sim = max(
+                    1, int(scenario.metadata.get("num_simulations", 1) or 1)
+                )
+                steps = total_accounts * num_sim
+            else:
+                steps = total_accounts
+            scenario_step_info.append((scenario, steps))
+            total_steps += steps
+        total_steps = max(total_steps, 1)
+        total_scenarios = len(scenario_plan)
+
         current_step = 0
 
         def emit_progress(step: int, message: str) -> None:
             if progress_callback:
+                safe_step = max(0, min(step, total_steps))
                 try:
-                    progress_callback(step, total_steps, message)
+                    progress_callback(safe_step, total_steps, message)
                 except Exception:  # pragma: no cover - guard rail
                     pass
 
         results = EngineResults(base_scenario_id="base")
         emit_progress(0, "Initializing scenario projections...")
 
-        for index, scenario in enumerate(scenario_plan, start=1):
+        for index, (scenario, scenario_steps) in enumerate(
+            scenario_step_info, start=1
+        ):
             scenario_label = scenario.description or scenario.scenario_id
             emit_progress(
                 current_step,
@@ -247,19 +265,40 @@ class ALMEngine:
             )
 
             if scenario.scenario_type == ScenarioType.MONTE_CARLO:
+                step_offset = current_step
+
+                def simulation_progress(sim_idx: int, sim_total: int) -> None:
+                    progress_value = step_offset + min(
+                        scenario_steps, total_accounts * sim_idx
+                    )
+                    emit_progress(
+                        progress_value,
+                        (
+                            f"Scenario {index}/{total_scenarios}: "
+                            f"simulation {sim_idx}/{sim_total}"
+                        ),
+                    )
+
                 scenario_result = self._run_monte_carlo(
                     scenario=scenario,
                     projector=projector,
                     settings=settings,
                     pv_calculator=pv_calculator,
+                    progress_callback=emit_progress,
+                    step_offset=current_step,
+                    total_steps=total_steps,
+                    total_accounts=total_accounts,
+                    scenario_index=index,
+                    total_scenarios=total_scenarios,
+                    simulation_callback=simulation_progress,
                 )
-                current_step = min(total_steps, index * total_accounts)
+                current_step += scenario_steps
                 emit_progress(
                     current_step,
                     f"Scenario {index}/{total_scenarios}: {scenario_label} complete",
                 )
             else:
-                step_offset = (index - 1) * total_accounts
+                step_offset = current_step
 
                 def account_progress(
                     account_idx: int,
@@ -267,13 +306,9 @@ class ALMEngine:
                     account_id: str,
                     scenario_id: str,
                 ) -> None:
-                    nonlocal current_step
-                    current_step = min(
-                        total_steps,
-                        step_offset + account_idx,
-                    )
+                    progress_value = step_offset + account_idx
                     emit_progress(
-                        current_step,
+                        progress_value,
                         (
                             f"Scenario {index}/{total_scenarios}: "
                             f"account {account_idx}/{account_total} ({account_id})"
@@ -295,7 +330,7 @@ class ALMEngine:
                     account_level_pv=account_pv,
                     metadata={"method": scenario.scenario_type.value},
                 )
-                current_step = min(total_steps, index * total_accounts)
+                current_step += scenario_steps
                 emit_progress(
                     current_step,
                     f"Scenario {index}/{total_scenarios}: {scenario_label} complete",
@@ -352,6 +387,14 @@ class ALMEngine:
         projector: CashflowProjector,
         settings: ProjectionSettings,
         pv_calculator: PresentValueCalculator,
+        *,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        step_offset: int = 0,
+        total_steps: int = 1,
+        total_accounts: int = 1,
+        scenario_index: int = 1,
+        total_scenarios: int = 1,
+        simulation_callback: Optional[Callable[[int, int], None]] = None,
     ) -> ScenarioResult:
         """Execute Monte Carlo simulations and aggregate results."""
         import pandas as pd
@@ -383,7 +426,63 @@ class ALMEngine:
                 shock_vector=shock_vector,
                 description="Monte Carlo simulation path",
             )
-            cashflows = projector.project(self.accounts, sim_scenario, settings)
+            sim_offset = step_offset + idx * total_accounts
+
+            if progress_callback or simulation_callback:
+                message = (
+                    f"Scenario {scenario_index}/{total_scenarios}: "
+                    f"simulation {idx + 1}/{num_sim}"
+                )
+                if progress_callback:
+                    try:
+                        progress_callback(sim_offset, total_steps, message)
+                    except Exception:  # pragma: no cover
+                        pass
+                if simulation_callback:
+                    try:
+                        simulation_callback(idx + 1, num_sim)
+                    except Exception:  # pragma: no cover
+                        pass
+
+            def account_progress(
+                account_idx: int,
+                account_total: int,
+                account_id: str,
+                scenario_id: str,
+            ) -> None:
+                if not progress_callback:
+                    return
+                current = sim_offset + account_idx
+                message = (
+                    f"Scenario {scenario_index}/{total_scenarios}: "
+                    f"simulation {idx + 1}/{num_sim}, "
+                    f"account {account_idx}/{account_total} ({account_id})"
+                )
+                try:
+                    progress_callback(current, total_steps, message)
+                except Exception:  # pragma: no cover
+                    pass
+
+            cashflows = projector.project(
+                self.accounts,
+                sim_scenario,
+                settings,
+                account_progress=account_progress,
+            )
+
+            if progress_callback:
+                try:
+                    progress_callback(
+                        min(total_steps, sim_offset + total_accounts),
+                        total_steps,
+                        (
+                            f"Scenario {scenario_index}/{total_scenarios}: "
+                            f"simulation {idx + 1}/{num_sim} complete"
+                        ),
+                    )
+                except Exception:  # pragma: no cover
+                    pass
+
             pv_values[idx] = pv_calculator.portfolio_pv(cashflows)
             monthly_totals = (
                 cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
