@@ -409,14 +409,16 @@ def main() -> None:
             margin: 0;
         }
         .stApp label,
+        .stApp label span,
         .stApp [data-testid="stMarkdown"] p,
         .stApp [data-testid="stMarkdown"] li,
         .stApp [data-testid="stCaption"],
         .stApp .stNumberInput label,
         .stApp .stRadio label,
         .stApp .stCheckbox label,
-        .stApp div[role="radiogroup"] span,
-        .stApp div[data-baseweb="checkbox"] span {
+        .stApp [data-testid="stExpander"] button p,
+        .stApp div[role="radiogroup"] label span,
+        .stApp div[data-baseweb="checkbox"] label span {
             color: #f6f9ff !important;
         }
         .stApp .stNumberInput input,
@@ -425,7 +427,8 @@ def main() -> None:
             color: #0f2d63 !important;
         }
         .stApp div[data-baseweb="select"] span,
-        .stApp .stMultiSelect div[data-baseweb="tag"] span {
+        .stApp .stMultiSelect div[data-baseweb="tag"] span,
+        .stApp div[data-baseweb="select"] input {
             color: #0f2d63 !important;
         }
         .stDataFrame, .stTable {
