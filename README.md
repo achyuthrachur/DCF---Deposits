@@ -9,8 +9,8 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 - Support for multiple segmentation approaches (all accounts, by account type, by customer segment).
 - Manual capture of the four core assumptions (decay, WAL, deposit beta, repricing beta).
 - Scenario generation for standard parallel rate shocks plus Monte Carlo simulations with configurable volatility and drift.
-- Account-level cash flow projection and present value calculation.
-- CSV report exports (scenario summary, cash flow detail, account-level PV).
+- Account-level cash flow projection, terminal value capture, and present value calculation.
+- CSV report exports (scenario summary, cash flow detail, account-level PV) with optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
 
 ## Getting Started
 1. Install dependencies:

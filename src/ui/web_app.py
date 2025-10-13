@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import sys
+import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -19,6 +21,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
 from src.reporting.report_generator import ReportGenerator
+from src.visualization import (
+    create_monte_carlo_dashboard,
+    extract_monte_carlo_data,
+    plot_percentile_ladder,
+    plot_portfolio_pv_distribution,
+    plot_rate_confidence_fan,
+    plot_rate_path_spaghetti,
+)
 
 REQUIRED_FIELDS = {
     "account_id": "Unique account identifier",
@@ -246,8 +256,8 @@ def _collect_scenarios() -> Tuple[Dict[str, bool], Optional[Dict[str, float]]]:
     with st.expander("Monte Carlo simulation", expanded=False):
         enable_mc = st.checkbox("Run Monte Carlo simulation", value=False, key="scenario_monte_carlo")
         st.caption(
-            "Monte Carlo draws apply monthly rate shocks (decimal). "
-            "Results include expected cash flows and PV distribution statistics."
+            "Monte Carlo draws apply quarterly rate shocks (decimal). "
+            "Results include expected cash flow and PV distribution statistics."
         )
         if enable_mc:
             scenario_flags["monte_carlo"] = True
@@ -261,16 +271,16 @@ def _collect_scenarios() -> Tuple[Dict[str, bool], Optional[Dict[str, float]]]:
                     step=100,
                 )
             with mc_cols[1]:
-                monthly_vol_bps = st.number_input(
-                    "Volatility (bps / month)",
+                quarterly_vol_bps = st.number_input(
+                    "Volatility (bps / quarter)",
                     min_value=0.0,
                     max_value=500.0,
                     value=25.0,
                     step=5.0,
                 )
             with mc_cols[2]:
-                monthly_drift_bps = st.number_input(
-                    "Drift (bps / month)",
+                quarterly_drift_bps = st.number_input(
+                    "Drift (bps / quarter)",
                     min_value=-200.0,
                     max_value=200.0,
                     value=0.0,
@@ -278,10 +288,18 @@ def _collect_scenarios() -> Tuple[Dict[str, bool], Optional[Dict[str, float]]]:
                 )
             with mc_cols[3]:
                 seed_input = st.text_input("Random seed (optional)", value="")
+
+            symmetric = st.checkbox("Use symmetric shocks (+Z/−Z)", value=False, key="mc_symmetric")
+            opposite_drift = st.checkbox("Pair opposite drift signs", value=False, key="mc_opposite_drift")
+            fixed_mag = st.checkbox("Use fixed ±vol shocks", value=False, key="mc_fixed_mag")
+
             monte_carlo_config = {
                 "num_simulations": float(num_sim),
-                "monthly_volatility": monthly_vol_bps / 10000,
-                "monthly_drift": monthly_drift_bps / 10000,
+                "quarterly_volatility": quarterly_vol_bps / 10000,
+                "quarterly_drift": quarterly_drift_bps / 10000,
+                "symmetric_shocks": symmetric,
+                "pair_opposite_drift": opposite_drift,
+                "use_fixed_magnitude": fixed_mag,
             }
             if seed_input.strip():
                 try:
@@ -418,12 +436,14 @@ def main() -> None:
         .stApp label span,
         .stApp [data-testid="stMarkdown"] p,
         .stApp [data-testid="stMarkdown"] li,
+        .stApp [data-testid="stMarkdown"] a,
         .stApp [data-testid="stCaption"],
         .stApp [data-testid="stNumberInputLabel"] p,
         .stApp [data-testid="stRadio"] label div p,
         .stApp [data-testid="stRadio"] label div span,
         .stApp [data-testid="stCheckbox"] label div p,
         .stApp [data-testid="stCheckbox"] label div span,
+        .stApp [data-testid="stSelectbox"] div p,
         .stApp [data-testid="stExpander"] button p,
         .stApp [data-testid="stExpander"] button span {
             color: #f6f9ff !important;
@@ -437,6 +457,20 @@ def main() -> None:
         .stApp .stMultiSelect div[data-baseweb="tag"] span,
         .stApp div[data-baseweb="select"] input {
             color: #0f2d63 !important;
+        }
+        .stApp .stButton > button,
+        .stApp .stDownloadButton > button {
+            background: linear-gradient(135deg, #ffc94b, #f0a500);
+            color: #0b1d3a !important;
+            font-weight: 700 !important;
+            border: none;
+            border-radius: 999px;
+            padding: 0.6rem 1.8rem;
+        }
+        .stApp .stButton > button:hover,
+        .stApp .stDownloadButton > button:hover {
+            background: linear-gradient(135deg, #ffd66b, #ffb400);
+            color: #04122a !important;
         }
         .stDataFrame, .stTable {
             background: rgba(255, 255, 255, 0.95) !important;
@@ -455,18 +489,6 @@ def main() -> None:
             font-size: 0.85rem;
             z-index: 999;
             box-shadow: 0 8px 20px rgba(0,0,0,0.35);
-        }
-        .stButton > button {
-            background: linear-gradient(135deg, #ffc94b, #f0a500);
-            color: #0f2d63;
-            font-weight: 700;
-            border: none;
-            border-radius: 999px;
-            padding: 0.6rem 1.8rem;
-        }
-        .stButton > button:hover {
-            background: linear-gradient(135deg, #ffd66b, #ffb400);
-            color: #08214a;
         }
         </style>
         """,
@@ -725,11 +747,14 @@ def main() -> None:
             if monte_carlo_config:
                 engine.set_monte_carlo_config(
                     num_simulations=int(monte_carlo_config["num_simulations"]),
-                    monthly_volatility=float(monte_carlo_config["monthly_volatility"]),
-                    monthly_drift=float(monte_carlo_config["monthly_drift"]),
+                    quarterly_volatility=float(monte_carlo_config["quarterly_volatility"]),
+                    quarterly_drift=float(monte_carlo_config["quarterly_drift"]),
                     random_seed=int(monte_carlo_config["random_seed"])
                     if "random_seed" in monte_carlo_config
                     else None,
+                    symmetric_shocks=bool(monte_carlo_config.get("symmetric_shocks", False)),
+                    pair_opposite_drift=bool(monte_carlo_config.get("pair_opposite_drift", False)),
+                    use_fixed_magnitude=bool(monte_carlo_config.get("use_fixed_magnitude", False)),
                 )
             engine.configure_standard_scenarios(scenario_flags)
             progress_text = st.empty()
@@ -808,6 +833,51 @@ def main() -> None:
                 sim_table,
                 f"pv_distribution_{selected_scenario}.csv",
             )
+
+        viz_data = extract_monte_carlo_data(results, scenario_id=selected_scenario)
+        if viz_data:
+            st.markdown("### Monte Carlo Visualisations")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                fig = plot_rate_path_spaghetti(viz_data["rate_sample"], viz_data["rate_summary"])
+                st.pyplot(fig)
+            with col_b:
+                fig = plot_rate_confidence_fan(viz_data["rate_summary"])
+                st.pyplot(fig)
+            fig = plot_portfolio_pv_distribution(
+                viz_data["pv_distribution"],
+                book_value=viz_data.get("book_value"),
+                base_case_pv=viz_data.get("base_case_pv"),
+                percentiles=viz_data.get("percentiles"),
+            )
+            st.pyplot(fig)
+            fig = plot_percentile_ladder(
+                viz_data.get("percentiles", {}),
+                book_value=viz_data.get("book_value"),
+                base_case_pv=viz_data.get("base_case_pv"),
+            )
+            st.pyplot(fig)
+            dashboard = create_monte_carlo_dashboard(viz_data)
+            st.pyplot(dashboard)
+
+            with st.expander("Download Monte Carlo visualisations"):
+                if st.button("Generate and download charts", key="download_mc_plots"):
+                    generator = ReportGenerator()
+                    files = generator.export_monte_carlo_visuals(
+                        results, scenario_id=selected_scenario, prefix=selected_scenario
+                    )
+                    if files:
+                        buffer = io.BytesIO()
+                        with zipfile.ZipFile(buffer, "w") as zf:
+                            for name, path in files.items():
+                                zf.write(path, arcname=Path(path).name)
+                        buffer.seek(0)
+                        st.download_button(
+                            label="Download ZIP",
+                            data=buffer,
+                            file_name=f"{selected_scenario}_visuals.zip",
+                            mime="application/zip",
+                        )
     else:
         cashflows = scenario_result.cashflows
         monthly_summary = (

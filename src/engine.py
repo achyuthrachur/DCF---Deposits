@@ -185,20 +185,28 @@ class ALMEngine:
         self,
         *,
         num_simulations: int,
-        monthly_volatility: float,
-        monthly_drift: float = 0.0,
+        quarterly_volatility: float,
+        quarterly_drift: float = 0.0,
         random_seed: Optional[int] = None,
+        symmetric_shocks: bool = False,
+        pair_opposite_drift: bool = False,
+        use_fixed_magnitude: bool = False,
     ) -> None:
-        """Configure parameters for Monte Carlo simulations (volatility in decimal form)."""
+        """Configure quarterly-based Monte Carlo simulation parameters."""
+
         if num_simulations <= 0:
             raise ValueError("num_simulations must be positive")
-        if monthly_volatility < 0:
-            raise ValueError("monthly_volatility must be non-negative")
+        if quarterly_volatility < 0:
+            raise ValueError("quarterly_volatility must be non-negative")
+
         self._monte_carlo_config = {
             "num_simulations": int(num_simulations),
-            "monthly_volatility": float(monthly_volatility),
-            "monthly_drift": float(monthly_drift),
+            "quarterly_volatility": float(quarterly_volatility),
+            "quarterly_drift": float(quarterly_drift),
             "random_seed": int(random_seed) if random_seed is not None else None,
+            "symmetric_shocks": bool(symmetric_shocks),
+            "pair_opposite_drift": bool(pair_opposite_drift),
+            "use_fixed_magnitude": bool(use_fixed_magnitude),
         }
 
     # --------------------------------------------------------------- Execution
@@ -284,7 +292,7 @@ class ALMEngine:
                     projector=projector,
                     settings=settings,
                     pv_calculator=pv_calculator,
-                    progress_callback=emit_progress,
+                    progress_callback=lambda s, _t, m: emit_progress(s, m),
                     step_offset=current_step,
                     total_steps=total_steps,
                     total_accounts=total_accounts,
@@ -403,23 +411,66 @@ class ALMEngine:
         num_sim = int(config.get("num_simulations", 0))
         if num_sim <= 0:
             raise ValidationError("Monte Carlo configuration requires num_simulations > 0")
-        vol = float(config.get("monthly_volatility", 0.0))
-        drift = float(config.get("monthly_drift", 0.0))
+        if "quarterly_volatility" in config:
+            vol_q = float(config.get("quarterly_volatility", 0.0))
+            drift_q = float(config.get("quarterly_drift", 0.0))
+        else:  # Backwards compatibility with monthly inputs
+            vol_q = float(config.get("monthly_volatility", 0.0)) * np.sqrt(3.0)
+            drift_q = float(config.get("monthly_drift", 0.0)) * 3.0
         seed = config.get("random_seed")
+
+        symmetric_shocks = bool(config.get("symmetric_shocks", False))
+        pair_opposite_drift = bool(config.get("pair_opposite_drift", False))
+        use_fixed_magnitude = bool(config.get("use_fixed_magnitude", False))
 
         rng = np.random.default_rng(seed)
         months = settings.projection_months
+        quarter_count = int(np.ceil(months / 3))
         month_index = np.arange(1, months + 1)
+        quarter_index = np.arange(1, quarter_count + 1)
+        base_path = np.array(settings.base_market_rates[:months], dtype=float)
 
         principal_sum = np.zeros(months)
         interest_sum = np.zeros(months)
         total_sum = np.zeros(months)
         pv_values = np.zeros(num_sim)
+        rate_paths = np.zeros((num_sim, months))
+
+        def build_shocks_matrix() -> np.ndarray:
+            if use_fixed_magnitude:
+                signs = rng.choice([-1.0, 1.0], size=(num_sim, quarter_count))
+                base = np.abs(vol_q) * signs
+                if pair_opposite_drift:
+                    drift_signs = np.where((np.arange(num_sim) % 2) == 0, 1.0, -1.0).reshape(-1, 1)
+                    drift_part = drift_signs * np.abs(drift_q)
+                else:
+                    drift_part = np.full((num_sim, quarter_count), drift_q)
+                return drift_part + base
+
+            if symmetric_shocks:
+                half = (num_sim + 1) // 2
+                Z = rng.standard_normal(size=(half, quarter_count))
+                pos = drift_q + vol_q * Z
+                neg = drift_q - vol_q * Z
+                mat = np.vstack([pos, neg])[:num_sim]
+            else:
+                mat = rng.normal(loc=drift_q, scale=vol_q, size=(num_sim, quarter_count))
+
+            if pair_opposite_drift:
+                drift_signs = np.where((np.arange(num_sim) % 2) == 0, 1.0, -1.0).reshape(-1, 1)
+                mat = (mat - drift_q) + drift_signs * np.abs(drift_q)
+            return mat
+
+        quarterly_shocks_matrix = build_shocks_matrix()
 
         for idx in range(num_sim):
-            monthly_shocks = rng.normal(loc=drift, scale=vol, size=months)
-            cumulative_shock = np.cumsum(monthly_shocks)
-            shock_vector = {int(month): float(shock) for month, shock in zip(month_index, cumulative_shock)}
+            quarterly_shocks = quarterly_shocks_matrix[idx]
+            cumulative_quarters = np.cumsum(quarterly_shocks)
+            monthly_levels = np.repeat(cumulative_quarters, 3)[:months]
+            shock_vector = {
+                int(month): float(shock)
+                for month, shock in zip(month_index, monthly_levels)
+            }
             sim_scenario = ScenarioDefinition(
                 scenario_id=f"{scenario.scenario_id}_sim_{idx + 1}",
                 scenario_type=ScenarioType.CUSTOM,
@@ -427,6 +478,7 @@ class ALMEngine:
                 description="Monte Carlo simulation path",
             )
             sim_offset = step_offset + idx * total_accounts
+            rate_paths[idx] = np.maximum(0.0, base_path + monthly_levels)
 
             if progress_callback or simulation_callback:
                 message = (
@@ -444,31 +496,25 @@ class ALMEngine:
                     except Exception:  # pragma: no cover
                         pass
 
-            def account_progress(
-                account_idx: int,
-                account_total: int,
-                account_id: str,
-                scenario_id: str,
-            ) -> None:
-                if not progress_callback:
-                    return
-                current = sim_offset + account_idx
-                message = (
-                    f"Scenario {scenario_index}/{total_scenarios}: "
-                    f"simulation {idx + 1}/{num_sim}, "
-                    f"account {account_idx}/{account_total} ({account_id})"
-                )
-                try:
-                    progress_callback(current, total_steps, message)
-                except Exception:  # pragma: no cover
-                    pass
-
             cashflows = projector.project(
                 self.accounts,
                 sim_scenario,
                 settings,
-                account_progress=account_progress,
             )
+
+            if progress_callback:
+                unique_accounts = cashflows["account_id"].unique()
+                for account_idx, account_id in enumerate(unique_accounts, start=1):
+                    current = sim_offset + account_idx
+                    message = (
+                        f"Scenario {scenario_index}/{total_scenarios}: "
+                        f"simulation {idx + 1}/{num_sim}, "
+                        f"account {account_idx}/{len(unique_accounts)} ({account_id})"
+                    )
+                    try:
+                        progress_callback(current, total_steps, message)
+                    except Exception:  # pragma: no cover
+                        pass
 
             if progress_callback:
                 try:
@@ -523,12 +569,64 @@ class ALMEngine:
                 {"simulation": np.arange(1, num_sim + 1), "present_value": pv_values}
             )
         }
+
+        sample_size = min(num_sim, 500)
+        sample_indices = (
+            np.linspace(0, num_sim - 1, sample_size).astype(int)
+            if sample_size > 0
+            else np.array([], dtype=int)
+        )
+        if sample_size:
+            sample_df = pd.DataFrame(
+                rate_paths[sample_indices],
+                columns=[f"month_{i+1}" for i in range(months)],
+            )
+            sample_df.insert(0, "simulation", sample_indices + 1)
+            extra_tables["rate_paths_sample"] = sample_df
+
+        rate_summary = pd.DataFrame({
+            "month": month_index,
+            "mean": rate_paths.mean(axis=0),
+            "p01": np.percentile(rate_paths, 1, axis=0),
+            "p05": np.percentile(rate_paths, 5, axis=0),
+            "p10": np.percentile(rate_paths, 10, axis=0),
+            "p25": np.percentile(rate_paths, 25, axis=0),
+            "p50": np.percentile(rate_paths, 50, axis=0),
+            "p75": np.percentile(rate_paths, 75, axis=0),
+            "p90": np.percentile(rate_paths, 90, axis=0),
+            "p95": np.percentile(rate_paths, 95, axis=0),
+            "p99": np.percentile(rate_paths, 99, axis=0),
+            "min": rate_paths.min(axis=0),
+            "max": rate_paths.max(axis=0),
+            "base_rate": base_path,
+        })
+        extra_tables["rate_paths_summary"] = rate_summary
+        pv_percentiles = {
+            "mean": float(pv_series.mean()),
+            "std": float(pv_series.std(ddof=1) if num_sim > 1 else 0.0),
+            "min": float(pv_series.min()),
+            "max": float(pv_series.max()),
+            "p1": float(pv_series.quantile(0.01)),
+            "p5": float(pv_series.quantile(0.05)),
+            "p10": float(pv_series.quantile(0.10)),
+            "p25": float(pv_series.quantile(0.25)),
+            "p50": float(pv_series.quantile(0.50)),
+            "p75": float(pv_series.quantile(0.75)),
+            "p90": float(pv_series.quantile(0.90)),
+            "p95": float(pv_series.quantile(0.95)),
+            "p99": float(pv_series.quantile(0.99)),
+        }
+
         metadata = {
             "method": scenario.scenario_type.value,
             "num_simulations": num_sim,
-            "monthly_volatility": vol,
-            "monthly_drift": drift,
+            "quarterly_volatility": vol_q,
+            "quarterly_drift": drift_q,
             "random_seed": seed,
+            "symmetric_shocks": symmetric_shocks,
+            "pair_opposite_drift": pair_opposite_drift,
+            "use_fixed_magnitude": use_fixed_magnitude,
+            "pv_percentiles": pv_percentiles,
         }
 
         return ScenarioResult(

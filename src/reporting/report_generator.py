@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import json
 
 import pandas as pd
 
 from ..models.results import EngineResults
+from ..visualization import (
+    create_monte_carlo_dashboard,
+    extract_monte_carlo_data,
+    plot_percentile_ladder,
+    plot_portfolio_pv_distribution,
+    plot_rate_confidence_fan,
+    plot_rate_path_spaghetti,
+)
+from ..visualization.monte_carlo_plots import save_figure
 
 
 class ReportGenerator:
@@ -105,3 +114,56 @@ class ReportGenerator:
         with path.open("w", encoding="utf-8") as fh:
             json.dump(results.validation_summary, fh, indent=2)
         return path
+
+    def export_monte_carlo_visuals(
+        self,
+        results: EngineResults,
+        scenario_id: str = "monte_carlo",
+        prefix: str = "monte_carlo",
+    ) -> Dict[str, Path]:
+        """Generate core Monte Carlo charts and persist them to disk."""
+
+        data = extract_monte_carlo_data(results, scenario_id=scenario_id)
+        if not data:
+            return {}
+
+        output_paths: Dict[str, Path] = {}
+
+        try:
+            fig = plot_rate_path_spaghetti(data["rate_sample"], data["rate_summary"])
+            output_paths["rate_spaghetti"] = save_figure(
+                fig, self.output_dir / f"{prefix}_rate_spaghetti.png"
+            )
+
+            fig = plot_rate_confidence_fan(data["rate_summary"])
+            output_paths["rate_fan"] = save_figure(
+                fig, self.output_dir / f"{prefix}_rate_fan.png"
+            )
+
+            fig = plot_portfolio_pv_distribution(
+                data["pv_distribution"],
+                book_value=data.get("book_value"),
+                base_case_pv=data.get("base_case_pv"),
+                percentiles=data.get("percentiles"),
+            )
+            output_paths["pv_distribution"] = save_figure(
+                fig, self.output_dir / f"{prefix}_pv_distribution.png"
+            )
+
+            fig = plot_percentile_ladder(
+                data.get("percentiles", {}),
+                book_value=data.get("book_value"),
+                base_case_pv=data.get("base_case_pv"),
+            )
+            output_paths["pv_percentiles"] = save_figure(
+                fig, self.output_dir / f"{prefix}_percentiles.png"
+            )
+
+            fig = create_monte_carlo_dashboard(data)
+            output_paths["dashboard"] = save_figure(
+                fig, self.output_dir / f"{prefix}_dashboard.png"
+            )
+        except Exception:  # pragma: no cover - visual generation is best-effort
+            return output_paths
+
+        return output_paths

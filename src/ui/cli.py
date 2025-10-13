@@ -174,16 +174,22 @@ def _prompt_scenario_selection() -> tuple[Dict[str, bool], Optional[Dict[str, fl
             typer.prompt("Number of simulations", default="1000")
         )
         vol_bps = float(
-            typer.prompt("Monthly volatility (bps)", default="25")
+            typer.prompt("Quarterly volatility (bps)", default="25")
         )
         drift_bps = float(
-            typer.prompt("Monthly drift (bps)", default="0")
+            typer.prompt("Quarterly drift (bps)", default="0")
         )
+        symmetric = typer.confirm("Use symmetric shocks (pair +Z/-Z)?", default=False)
+        opposite_drift = typer.confirm("Pair opposite drift signs?", default=False)
+        fixed_mag = typer.confirm("Use fixed ±vol shocks (Rademacher)?", default=False)
         seed_value = typer.prompt("Random seed (leave blank for random)", default="")
         monte_carlo_config = {
             "num_simulations": num_sim,
-            "monthly_volatility": vol_bps / 10000,
-            "monthly_drift": drift_bps / 10000,
+            "quarterly_volatility": vol_bps / 10000,
+            "quarterly_drift": drift_bps / 10000,
+            "symmetric_shocks": symmetric,
+            "pair_opposite_drift": opposite_drift,
+            "use_fixed_magnitude": fixed_mag,
         }
         if seed_value.strip():
             monte_carlo_config["random_seed"] = int(seed_value.strip())
@@ -202,6 +208,10 @@ def run(
     output_dir: Path = typer.Option(Path("output"), help="Directory for report exports"),
     cashflow_sample_size: int = typer.Option(
         20, help="Number of accounts to include when exporting detailed cashflows (0 to export all)."
+    ),
+    generate_plots: bool = typer.Option(
+        False,
+        help="Generate Monte Carlo visualisation PNGs when a Monte Carlo scenario is present.",
     ),
 ) -> None:
     """Run the ALM engine with manual input prompts."""
@@ -279,11 +289,14 @@ def run(
     if monte_carlo_config:
         engine.set_monte_carlo_config(
             num_simulations=int(monte_carlo_config["num_simulations"]),
-            monthly_volatility=float(monte_carlo_config["monthly_volatility"]),
-            monthly_drift=float(monte_carlo_config["monthly_drift"]),
+            quarterly_volatility=float(monte_carlo_config["quarterly_volatility"]),
+            quarterly_drift=float(monte_carlo_config["quarterly_drift"]),
             random_seed=int(monte_carlo_config["random_seed"])
             if "random_seed" in monte_carlo_config
             else None,
+            symmetric_shocks=bool(monte_carlo_config.get("symmetric_shocks", False)),
+            pair_opposite_drift=bool(monte_carlo_config.get("pair_opposite_drift", False)),
+            use_fixed_magnitude=bool(monte_carlo_config.get("use_fixed_magnitude", False)),
         )
     engine.configure_standard_scenarios(scenario_flags)
 
@@ -295,10 +308,17 @@ def run(
     base_cashflow_path = reporter.export_cashflows(
         results, "base", sample_size=max(0, cashflow_sample_size)
     )
+    plot_paths = {}
+    if generate_plots:
+        plot_paths = reporter.export_monte_carlo_visuals(results)
 
     console.print("\n[bold green]Analysis complete![/bold green]")
     console.print(f"Summary exported to: {summary_path}")
     console.print(f"Base cash flows exported to: {base_cashflow_path}")
+    if plot_paths:
+        console.print("Generated Monte Carlo charts:")
+        for name, path in plot_paths.items():
+            console.print(f"  • {name}: {path}")
     console.print("Additional scenarios can be exported using the reporting module.")
 
 
