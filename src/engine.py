@@ -225,14 +225,27 @@ class ALMEngine:
 
         scenario_plan = self.scenario_set().scenarios
         total_scenarios = len(scenario_plan)
+        total_accounts = max(len(self.accounts), 1)
+        total_steps = max(total_scenarios * total_accounts, 1)
+        current_step = 0
 
-        results = EngineResults(base_scenario_id="base")
-        for index, scenario in enumerate(scenario_plan, start=1):
+        def emit_progress(step: int, message: str) -> None:
             if progress_callback:
                 try:
-                    progress_callback(index, total_scenarios, scenario)
+                    progress_callback(step, total_steps, message)
                 except Exception:  # pragma: no cover - guard rail
                     pass
+
+        results = EngineResults(base_scenario_id="base")
+        emit_progress(0, "Initializing scenario projections...")
+
+        for index, scenario in enumerate(scenario_plan, start=1):
+            scenario_label = scenario.description or scenario.scenario_id
+            emit_progress(
+                current_step,
+                f"Scenario {index}/{total_scenarios}: {scenario_label}",
+            )
+
             if scenario.scenario_type == ScenarioType.MONTE_CARLO:
                 scenario_result = self._run_monte_carlo(
                     scenario=scenario,
@@ -240,8 +253,39 @@ class ALMEngine:
                     settings=settings,
                     pv_calculator=pv_calculator,
                 )
+                current_step = min(total_steps, index * total_accounts)
+                emit_progress(
+                    current_step,
+                    f"Scenario {index}/{total_scenarios}: {scenario_label} complete",
+                )
             else:
-                cashflows = projector.project(self.accounts, scenario, settings)
+                step_offset = (index - 1) * total_accounts
+
+                def account_progress(
+                    account_idx: int,
+                    account_total: int,
+                    account_id: str,
+                    scenario_id: str,
+                ) -> None:
+                    nonlocal current_step
+                    current_step = min(
+                        total_steps,
+                        step_offset + account_idx,
+                    )
+                    emit_progress(
+                        current_step,
+                        (
+                            f"Scenario {index}/{total_scenarios}: "
+                            f"account {account_idx}/{account_total} ({account_id})"
+                        ),
+                    )
+
+                cashflows = projector.project(
+                    self.accounts,
+                    scenario,
+                    settings,
+                    account_progress=account_progress,
+                )
                 account_pv = pv_calculator.account_level_pv(cashflows)
                 portfolio_pv = pv_calculator.portfolio_pv(cashflows)
                 scenario_result = ScenarioResult(
@@ -250,6 +294,11 @@ class ALMEngine:
                     present_value=portfolio_pv,
                     account_level_pv=account_pv,
                     metadata={"method": scenario.scenario_type.value},
+                )
+                current_step = min(total_steps, index * total_accounts)
+                emit_progress(
+                    current_step,
+                    f"Scenario {index}/{total_scenarios}: {scenario_label} complete",
                 )
             results.add_result(scenario_result)
 

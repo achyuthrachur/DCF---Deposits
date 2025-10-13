@@ -732,18 +732,13 @@ def main() -> None:
                     else None,
                 )
             engine.configure_standard_scenarios(scenario_flags)
-            scenario_plan = engine.scenario_set().scenarios
-            total_scenarios = max(len(scenario_plan), 1)
             progress_text = st.empty()
-            progress_bar = st.progress(5)
+            progress_bar = st.progress(0)
 
-            def progress_callback(index: int, total: int, scenario) -> None:
-                label = scenario.description or scenario.scenario_id
-                pct = min(70, int(5 + (index / max(total, 1)) * 60))
-                progress_text.markdown(
-                    f"**Running scenario {index}/{total}: {label}...**"
-                )
-                progress_bar.progress(pct)
+            def progress_callback(current: int, total: int, message: str) -> None:
+                pct = int((current / max(total, 1)) * 100)
+                progress_text.markdown(f"**{message}**")
+                progress_bar.progress(min(100, pct))
 
             with st.spinner("Executing cash flow projections..."):
                 results = engine.run_analysis(

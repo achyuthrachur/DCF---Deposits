@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -33,13 +33,18 @@ class CashflowProjector:
         accounts: Iterable[AccountRecord],
         scenario: ScenarioDefinition,
         settings: ProjectionSettings,
+        account_progress: Optional[
+            "Callable[[int, int, str, str], None]"
+        ] = None,
     ) -> pd.DataFrame:
         """Compute monthly cash flows for the supplied accounts."""
         rows: List[dict] = []
         base_rates = self._extend_rate_path(
             settings.base_market_rates, settings.projection_months
         )
-        for account in accounts:
+        account_list = list(accounts)
+        total_accounts = len(account_list)
+        for idx, account in enumerate(account_list, start=1):
             segment_key = account.key(
                 segmentation_key=self._segmentation_key(settings.segmentation_method)
             )
@@ -53,6 +58,13 @@ class CashflowProjector:
                     base_rates=base_rates,
                 )
             )
+            if account_progress:
+                account_progress(
+                    idx,
+                    total_accounts,
+                    account.account_id,
+                    scenario.scenario_id,
+                )
         return pd.DataFrame(rows)
 
     def _project_account(
