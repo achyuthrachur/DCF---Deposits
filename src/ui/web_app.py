@@ -414,7 +414,9 @@ def main() -> None:
         .stApp [data-testid="stCaption"],
         .stApp .stNumberInput label,
         .stApp .stRadio label,
-        .stApp .stCheckbox label {
+        .stApp .stCheckbox label,
+        .stApp div[role="radiogroup"] span,
+        .stApp div[data-baseweb="checkbox"] span {
             color: #f6f9ff !important;
         }
         .stApp .stNumberInput input,
@@ -422,7 +424,8 @@ def main() -> None:
         .stApp textarea {
             color: #0f2d63 !important;
         }
-        .stApp div[data-baseweb="select"] span {
+        .stApp div[data-baseweb="select"] span,
+        .stApp .stMultiSelect div[data-baseweb="tag"] span {
             color: #0f2d63 !important;
         }
         .stDataFrame, .stTable {
