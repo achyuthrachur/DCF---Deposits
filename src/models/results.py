@@ -44,6 +44,10 @@ class EngineResults(BaseModel):
     base_scenario_id: Optional[str] = Field(
         default=None, description="Scenario used as the base case for comparisons"
     )
+    validation_summary: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Dynamic validation outcomes comparing PV to expected ratios",
+    )
 
     def add_result(self, result: ScenarioResult) -> None:
         """Store a scenario result."""

@@ -692,75 +692,88 @@ def main() -> None:
     scenario_flags, monte_carlo_config = _collect_scenarios()
 
     run_clicked = st.button("Run Analysis", type="primary")
-    if not run_clicked:
-        return
 
-    engine = ALMEngine()
-    try:
-        engine.load_dataframe(
-            dataframe=df_raw,
-            field_map=st.session_state["field_map"],
-            optional_fields=st.session_state.get("optional_fields", []),
-        )
-        engine.set_segmentation(segmentation)
-        for segment_key, values in assumptions.items():
-            engine.set_assumptions(
-                segment_key=segment_key,
-                decay_rate=_decimalize(values["decay_rate"]),
-                wal_years=values["wal_years"],
-                beta_up=_decimalize(values["beta_up"]),
-                beta_down=_decimalize(values["beta_down"]),
+    results = st.session_state.get("run_results")
+    progress_bar = None
+    progress_text = None
+
+    if run_clicked:
+        engine = ALMEngine()
+        try:
+            engine.load_dataframe(
+                dataframe=df_raw,
+                field_map=st.session_state["field_map"],
+                optional_fields=st.session_state.get("optional_fields", []),
             )
-        if isinstance(discount_config, dict):
-            engine.set_discount_yield_curve(discount_config)
+            engine.set_segmentation(segmentation)
+            for segment_key, values in assumptions.items():
+                engine.set_assumptions(
+                    segment_key=segment_key,
+                    decay_rate=_decimalize(values["decay_rate"]),
+                    wal_years=values["wal_years"],
+                    beta_up=_decimalize(values["beta_up"]),
+                    beta_down=_decimalize(values["beta_down"]),
+                )
+            if isinstance(discount_config, dict):
+                engine.set_discount_yield_curve(discount_config)
+            else:
+                engine.set_discount_single_rate(_decimalize(discount_config))
+            engine.set_base_market_rate_path(_decimalize(base_rate_input))
+            if monte_carlo_config:
+                engine.set_monte_carlo_config(
+                    num_simulations=int(monte_carlo_config["num_simulations"]),
+                    monthly_volatility=float(monte_carlo_config["monthly_volatility"]),
+                    monthly_drift=float(monte_carlo_config["monthly_drift"]),
+                    random_seed=int(monte_carlo_config["random_seed"])
+                    if "random_seed" in monte_carlo_config
+                    else None,
+                )
+            engine.configure_standard_scenarios(scenario_flags)
+            scenario_plan = engine.scenario_set().scenarios
+            total_scenarios = max(len(scenario_plan), 1)
+            progress_text = st.empty()
+            progress_bar = st.progress(5)
+
+            def progress_callback(index: int, total: int, scenario) -> None:
+                label = scenario.description or scenario.scenario_id
+                pct = min(70, int(5 + (index / max(total, 1)) * 60))
+                progress_text.markdown(
+                    f"**Running scenario {index}/{total}: {label}...**"
+                )
+                progress_bar.progress(pct)
+
+            with st.spinner("Executing cash flow projections..."):
+                results = engine.run_analysis(
+                    projection_months=int(projection_months),
+                    progress_callback=progress_callback,
+                )
+        except ValidationError as exc:
+            st.error(f"Validation error during execution: {exc}")
+            return
+        except Exception as exc:  # pragma: no cover - guard rail
+            st.error(f"Unexpected error: {exc}")
+            return
+
+        st.session_state["run_results"] = results
+        st.success("Analysis complete! Scroll down to review and download outputs.")
+
+        if progress_text and progress_bar:
+            progress_text.markdown("**Preparing summary metrics...**")
+            progress_bar.progress(80)
+    else:
+        if results is None:
+            st.info("Configure inputs and click **Run Analysis** to generate results.")
+            return
         else:
-            engine.set_discount_single_rate(_decimalize(discount_config))
-        engine.set_base_market_rate_path(_decimalize(base_rate_input))
-        if monte_carlo_config:
-            engine.set_monte_carlo_config(
-                num_simulations=int(monte_carlo_config["num_simulations"]),
-                monthly_volatility=float(monte_carlo_config["monthly_volatility"]),
-                monthly_drift=float(monte_carlo_config["monthly_drift"]),
-                random_seed=int(monte_carlo_config["random_seed"])
-                if "random_seed" in monte_carlo_config
-                else None,
+            st.caption(
+                "Displaying previously generated results. Run the analysis again to refresh."
             )
-        engine.configure_standard_scenarios(scenario_flags)
-        scenario_plan = engine.scenario_set().scenarios
-        total_scenarios = max(len(scenario_plan), 1)
-        progress_text = st.empty()
-        progress_bar = st.progress(5)
 
-        def progress_callback(index: int, total: int, scenario) -> None:
-            label = scenario.description or scenario.scenario_id
-            pct = min(70, int(5 + (index / max(total, 1)) * 60))
-            progress_text.markdown(f"**Running scenario {index}/{total}: {label}...**")
-            progress_bar.progress(pct)
-
-        with st.spinner("Executing cash flow projections..."):
-            results = engine.run_analysis(
-                projection_months=int(projection_months),
-                progress_callback=progress_callback,
-            )
-    except ValidationError as exc:
-        st.error(f"Validation error during execution: {exc}")
-        return
-    except Exception as exc:  # pragma: no cover - guard rail
-        st.error(f"Unexpected error: {exc}")
-        return
-
-
-    st.session_state["run_results"] = results
-
-    progress_text.markdown("**Preparing summary metrics...**")
     summary_df = results.summary_frame()
-    progress_bar.progress(80)
 
-    progress_text.markdown("**Rendering detailed outputs...**")
     st.markdown("### Scenario Present Value Summary")
     st.dataframe(summary_df)
     _download_button("Download summary CSV", summary_df, "eve_summary.csv")
-    progress_bar.progress(85)
 
     scenario_ids = list(results.scenario_results.keys())
     selected_scenario = st.selectbox(
@@ -779,7 +792,6 @@ def main() -> None:
             scenario_result.cashflows,
             f"cashflows_{selected_scenario}.csv",
         )
-        progress_bar.progress(85)
 
         st.markdown("### PV Distribution Statistics")
         st.dataframe(scenario_result.account_level_pv)
@@ -788,7 +800,6 @@ def main() -> None:
             scenario_result.account_level_pv,
             f"pv_stats_{selected_scenario}.csv",
         )
-        progress_bar.progress(92)
 
         sim_table = scenario_result.extra_tables.get("simulation_pv")
         if sim_table is not None:
@@ -799,7 +810,6 @@ def main() -> None:
                 sim_table,
                 f"pv_distribution_{selected_scenario}.csv",
             )
-        progress_bar.progress(100)
     else:
         cashflows = scenario_result.cashflows
         monthly_summary = (
@@ -822,10 +832,11 @@ def main() -> None:
             account_pv,
             f"account_pv_{selected_scenario}.csv",
         )
-        progress_bar.progress(100)
 
-    progress_text.empty()
-    st.success("Analysis complete!")
+    if progress_bar:
+        progress_bar.progress(100)
+    if progress_text:
+        progress_text.empty()
 
 if __name__ == "__main__":
     main()

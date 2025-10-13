@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import json
+
 import pandas as pd
 
 from ..models.results import EngineResults
@@ -52,4 +54,17 @@ class ReportGenerator:
         filename = filename or f"account_pv_{scenario_id}.csv"
         path = self.output_dir / filename
         result.account_level_pv.to_csv(path, index=False)
+        return path
+
+    def export_validation_summary(
+        self,
+        results: EngineResults,
+        filename: str = "validation_summary.json",
+    ) -> Optional[Path]:
+        """Export validation summary if available."""
+        if not results.validation_summary:
+            return None
+        path = self.output_dir / filename
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(results.validation_summary, fh, indent=2)
         return path

@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
+import pandas as pd
 
 from .core.cashflow_projector import CashflowProjector, ProjectionSettings
 from .core.data_loader import DataLoader, LoadResult
 from .core.discount import DiscountCurve
 from .core.pv_calculator import PresentValueCalculator
+from .core.pv_validation import validate_pv_results
 from .core.scenario_generator import assemble_standard_scenarios
 from .core.validator import ValidationError
 from .models.account import AccountRecord
@@ -40,6 +42,7 @@ class ALMEngine:
         self._scenario_set = ScenarioSet()
         self.field_map: Dict[str, str] = {}
         self._monte_carlo_config: Optional[Dict[str, Any]] = None
+        self._source_dataframe: Optional["pd.DataFrame"] = None
 
     # --------------------------------------------------------------------- Data
     def load_data(
@@ -59,6 +62,7 @@ class ALMEngine:
         )
         self.accounts = result.accounts
         self.field_map = dict(field_map)
+        self._source_dataframe = result.dataframe.copy()
         return result
 
     def load_dataframe(
@@ -82,6 +86,7 @@ class ALMEngine:
         )
         self.accounts = result.accounts
         self.field_map = dict(field_map)
+        self._source_dataframe = result.dataframe.copy()
         return result
 
     # ------------------------------------------------------------- Segmentation
@@ -247,6 +252,32 @@ class ALMEngine:
                     metadata={"method": scenario.scenario_type.value},
                 )
             results.add_result(scenario_result)
+
+        if (
+            results.base_scenario_id
+            and results.base_scenario_id in results.scenario_results
+            and self._source_dataframe is not None
+        ):
+            try:
+                base_result = results.scenario_results[results.base_scenario_id]
+                discount_rate = float(
+                    self.discount_curve().rate_for_month(self.projection_months)
+                )
+                validation = validate_pv_results(
+                    df_results=base_result.account_level_pv,
+                    df_original=self._source_dataframe,
+                    assumptions=self._assumptions.segments,
+                    discount_rate=discount_rate,
+                    projection_months=self.projection_months,
+                )
+                results.validation_summary = validation
+            except Exception as exc:  # pragma: no cover - safeguard
+                results.validation_summary = {
+                    "status": "ERROR",
+                    "failed_checks": ["validation_exception"],
+                    "warnings": [f"Validation failed: {exc}"],
+                }
+
         return results
 
     # ----------------------------------------------------------------- Helpers
