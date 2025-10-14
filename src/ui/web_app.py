@@ -20,10 +20,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
-from src.integration import FREDYieldCurveLoader
-from src.core.yield_curve import YieldCurve
 from src.reporting import ReportGenerator
 from src.visualization import (
+    create_monte_carlo_dashboard,
+    create_rate_path_animation,
     extract_monte_carlo_data,
     plot_percentile_ladder,
     plot_portfolio_pv_distribution,
@@ -81,9 +81,6 @@ SCENARIO_OPTIONS = [
     ("parallel_minus_200", "-200 bps parallel shock", False),
     ("parallel_minus_300", "-300 bps parallel shock", False),
     ("parallel_minus_400", "-400 bps parallel shock", False),
-    ("steepener", "Curve steepener (short down / long up)", False),
-    ("flattener", "Curve flattener (short up / long down)", False),
-    ("short_shock_up", "Short rate shock up", False),
 ]
 
 TENOR_LABELS: List[Tuple[int, str]] = [
@@ -768,111 +765,38 @@ def main() -> None:
         step=12,
         value=120,
     )
-    interpolation_method = st.selectbox(
-        "Yield curve interpolation",
-        options=["linear", "cubic", "log-linear"],
+
+    discount_method = st.radio(
+        "Discount rate configuration",
+        options=["Single rate", "Yield curve"],
         index=0,
-        key="discount_interpolation_method",
-    )
-
-    discount_option = st.radio(
-        "Discount curve configuration",
-        options=[
-            "Single rate (simple)",
-            "Fetch current Treasury curve from FRED (recommended)",
-            "Manual yield curve entry",
-        ],
-        index=1,
         horizontal=True,
-        key="discount_option",
     )
-
-    discount_selection: Optional[Dict[str, object]] = None
-
-    if discount_option.startswith("Single"):
-        rate_percent = st.number_input(
-            "Discount rate (annual %, e.g., 3.50)",
+    discount_config: Dict[int, float] | float
+    if discount_method == "Single rate":
+        discount_rate_input = st.number_input(
+            "Discount rate (annual decimal, e.g., 0.035 for 3.5%)",
             min_value=0.0,
-            max_value=15.0,
-            value=3.5,
-            step=0.25,
+            max_value=0.15,
+            value=0.035,
+            step=0.005,
         )
-        discount_selection = {
-            "mode": "single",
-            "rate": _decimalize(rate_percent),
-            "interpolation_method": interpolation_method,
-        }
-    elif discount_option.startswith("Fetch"):
-        st.caption("Provide a FRED API key to download the latest Treasury yield curve.")
-        fred_api_key = st.text_input(
-            "FRED API key",
-            value=st.session_state.get("fred_api_key", ""),
-            help="Get a free key at https://fred.stlouisfed.org/",
-        )
-        fetch_button = st.button("Fetch Current Curve", key="fetch_current_curve")
-        status_box = st.empty()
-        if fetch_button:
-            if not fred_api_key.strip():
-                status_box.error("Enter a valid FRED API key.")
-            else:
-                try:
-                    loader = FREDYieldCurveLoader(fred_api_key.strip())
-                    curve = loader.get_current_yield_curve(interpolation_method=interpolation_method)
-                    fetched_at = (
-                        loader.last_fetch_date.strftime("%Y-%m-%d")
-                        if loader.last_fetch_date
-                        else "latest available"
-                    )
-                    st.session_state["fred_curve_payload"] = {
-                        "curve": curve.to_dict(),
-                        "as_of": fetched_at,
-                        "interpolation_method": interpolation_method,
-                    }
-                    st.session_state["fred_api_key"] = fred_api_key.strip()
-                    status_box.success(f"Curve loaded successfully (as of {fetched_at}).")
-                except Exception as exc:  # pragma: no cover - network guard
-                    status_box.error(f"Failed to fetch curve: {exc}")
-        fred_state = st.session_state.get("fred_curve_payload")
-        if fred_state:
-            as_of = fred_state.get("as_of", "latest available")
-            st.caption(f"Using Treasury curve as of {as_of}.")
-            fred_curve = fred_state["curve"]
-            rate_cols = st.columns(4)
-            for idx, (tenor, rate) in enumerate(zip(fred_curve["tenors"], fred_curve["rates"])):
-                with rate_cols[idx % 4]:
-                    st.metric(f"{int(tenor)}M", f"{rate * 100:.2f}%")
-            discount_selection = {
-                "mode": "fred",
-                "curve": fred_state["curve"],
-                "interpolation_method": fred_state.get("interpolation_method", interpolation_method),
-                "api_key": st.session_state.get("fred_api_key", ""),
-                "last_updated": fred_state.get("as_of"),
-            }
-        else:
-            st.info("Click 'Fetch Current Curve' to load the latest Treasury yields.")
+        discount_config = discount_rate_input
     else:
-        st.write("Enter rates for each tenor (annual %, decimals also accepted).")
+        st.write("Enter rates for each tenor. Leave blank to omit a point.")
         tenor_values: Dict[int, float] = {}
-        manual_cols = st.columns(4)
-        for idx, (tenor, label) in enumerate(TENOR_LABELS):
-            with manual_cols[idx % 4]:
-                value = st.text_input(label, value="", key=f"tenor_{tenor}")
+        for tenor, label in TENOR_LABELS:
+            value = st.text_input(label, value="", key=f"tenor_{tenor}")
             if value.strip():
                 try:
                     tenor_values[tenor] = _decimalize(float(value.strip()))
                 except ValueError:
                     st.error(f"Invalid numeric value for {label}.")
                     return
-        if tenor_values:
-            ordered_tenors = sorted(tenor_values)
-            discount_selection = {
-                "mode": "manual",
-                "tenors": ordered_tenors,
-                "rates": [tenor_values[t] for t in ordered_tenors],
-                "interpolation_method": interpolation_method,
-            }
-        else:
-            st.warning("At least two tenor points are required for manual curve entry.")
+        if not tenor_values:
+            st.error("At least one tenor rate is required for yield curve configuration.")
+            return
+        discount_config = tenor_values
 
     base_rate_input = st.number_input(
         "Base market rate (annual decimal, e.g., 0.03 for 3%)",
@@ -889,10 +813,8 @@ def main() -> None:
     results = st.session_state.get("run_results")
     progress_bar = None
     progress_text = None
+
     if run_clicked:
-        if discount_selection is None:
-            st.error("Configure the discount curve before running analysis.")
-            return
         engine = ALMEngine()
         try:
             engine.load_dataframe(
@@ -911,49 +833,10 @@ def main() -> None:
                     repricing_beta_up=_decimalize(values["repricing_beta_up"]),
                     repricing_beta_down=_decimalize(values["repricing_beta_down"]),
                 )
-            if discount_selection["mode"] == "single":
-                engine.set_discount_single_rate(
-                    discount_selection["rate"],
-                    interpolation_method=discount_selection["interpolation_method"],
-                )
-            elif discount_selection["mode"] == "manual":
-                tenor_rates = {
-                    int(tenor): float(rate)
-                    for tenor, rate in zip(
-                        discount_selection["tenors"],
-                        discount_selection["rates"],
-                    )
-                }
-                engine.set_discount_yield_curve(
-                    tenor_rates,
-                    interpolation_method=discount_selection["interpolation_method"],
-                )
-            elif discount_selection["mode"] == "fred":
-                curve_payload = discount_selection["curve"]
-                interpolation = discount_selection.get(
-                    "interpolation_method", interpolation_method
-                )
-                yield_curve = YieldCurve(
-                    curve_payload["tenors"],
-                    curve_payload["rates"],
-                    interpolation_method=interpolation,
-                )
-                api_key = discount_selection.get("api_key", "")
-                masked_key = (
-                    f"{api_key[:4]}...{api_key[-4:]}" if api_key and len(api_key) > 8 else api_key
-                )
-                metadata = {
-                    "fred_api_key": masked_key,
-                    "last_updated": discount_selection.get("last_updated"),
-                }
-                engine.set_discount_curve_object(
-                    yield_curve,
-                    source="fred",
-                    extra_metadata=metadata,
-                )
+            if isinstance(discount_config, dict):
+                engine.set_discount_yield_curve(discount_config)
             else:
-                raise ValidationError("Unsupported discount configuration.")
-            st.session_state["selected_discount_config"] = discount_selection
+                engine.set_discount_single_rate(_decimalize(discount_config))
             engine.set_base_market_rate_path(_decimalize(base_rate_input))
             if monte_carlo_config:
                 engine.set_monte_carlo_config(
@@ -1050,32 +933,33 @@ def main() -> None:
             st.markdown("### Monte Carlo Visualisations")
             col_a, col_b = st.columns(2)
             with col_a:
-                fig = plot_rate_path_spaghetti(
-                    viz_data["rate_sample"],
-                    viz_data["rate_summary"],
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                fig = plot_rate_path_spaghetti(viz_data["rate_sample"], viz_data["rate_summary"])
+                st.pyplot(fig)
             with col_b:
                 fig = plot_rate_confidence_fan(viz_data["rate_summary"])
-                st.plotly_chart(fig, use_container_width=True)
+                st.pyplot(fig)
             fig = plot_portfolio_pv_distribution(
                 viz_data["pv_distribution"],
                 book_value=viz_data.get("book_value"),
-                base_case=viz_data.get("base_case_pv"),
+                base_case_pv=viz_data.get("base_case_pv"),
                 percentiles=viz_data.get("percentiles"),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.pyplot(fig)
             fig = plot_percentile_ladder(
                 viz_data.get("percentiles", {}),
                 book_value=viz_data.get("book_value"),
-                base_case=viz_data.get("base_case_pv"),
+                base_case_pv=viz_data.get("base_case_pv"),
             )
-            st.plotly_chart(fig, use_container_width=True)
-            st.info(
-                "Launch the full interactive dashboard via `python -m src.visualization.serve_dashboard` "
-                "for real-time linked analytics and advanced filtering.",
-                icon="📊",
-            )
+            st.pyplot(fig)
+            dashboard = create_monte_carlo_dashboard(viz_data)
+            st.pyplot(dashboard)
+            try:
+                animation_fig = create_rate_path_animation(
+                    viz_data["rate_sample"], viz_data["rate_summary"]
+                )
+                st.plotly_chart(animation_fig, use_container_width=True, key="mc_animation")
+            except Exception:
+                pass
     else:
         cashflows = scenario_result.cashflows
         monthly_summary = (

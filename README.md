@@ -8,10 +8,8 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 - CSV/Excel ingestion with interactive field mapping prompts.
 - Support for multiple segmentation approaches (all accounts, by account type, by customer segment).
 - Manual capture of the core assumptions (decay, WAL, deposit betas up/down, repricing betas up/down).
-- Scenario generation for parallel, curve-shape, and Monte Carlo shocks with configurable volatility and drift.
+- Scenario generation for standard parallel rate shocks plus Monte Carlo simulations with configurable volatility and drift.
 - Account-level cash flow projection, terminal value capture, and present value calculation.
-- Flexible discounting: choose a single flat rate or supply a full yield curve (manual entry or fetched automatically from FRED).
-- Interactive Plotly/Dash dashboards for Monte Carlo analytics, including live simulation monitoring and linked visual exploration.
 - CSV report exports (scenario summary, cash flow detail, account-level PV) with optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
 
 ## Getting Started
@@ -39,19 +37,17 @@ The web app renders results in-browser and provides download buttons for summary
 cashflow, and account-level PV CSVs.
 
 ### Supported Scenarios
-- Deterministic parallel shocks: rising and falling rate moves from +/-100 bps through +/-400 bps.
-- Curve shape shocks: steepener, flattener, and front-end shock patterns derived from the base yield curve.
-- Monte Carlo simulations: configurable number of simulations, quarterly volatility/drift inputs, and downloadable PV distributions.
+- Deterministic parallel shocks: rising and falling rate moves from ±100 bps through ±400 bps.
+- Monte Carlo simulations: configurable number of simulations, monthly volatility/drift inputs, and downloadable PV distributions.
+Additional non-parallel scenarios can be integrated in future phases.
 
 ## Project Structure
 ```
 src/
-|-- analysis/       # PV comparison and yield curve validation helpers
-|-- core/           # Calculation engines (cash flows, PV, scenarios)
-|-- integration/    # External data loaders (e.g., FRED Treasury curve fetcher)
-|-- models/         # Pydantic models for accounts, assumptions, scenarios, results
-|-- reporting/      # CSV export helpers
-|-- ui/             # CLI and Streamlit interfaces
+├── core/          # Calculation engines (cash flows, PV, scenarios)
+├── models/        # Pydantic models for accounts, assumptions, scenarios, results
+├── reporting/     # CSV export helpers
+└── ui/            # Typer CLI for manual data entry
 ```
 
 ## Sharing with Collaborators
@@ -73,9 +69,3 @@ service with a custom frontend. Streamlit Cloud offers the fastest path to a wor
 - Add advanced scenarios (steepener/flattener, ramps, Monte Carlo).
 - Harden the Streamlit UX (assumption templates, saved profiles, richer visuals).
 - Build comprehensive unit test coverage using `pytest`.
-
-## Interactive Dashboards
-- Run `python -m src.ui.cli` to configure Monte Carlo scenarios, then consume results via Plotly/Dash dashboards.
-- Use the Python API: `from src.visualization.monte_carlo_dashboard import create_dashboard_app`; pass your `EngineResults` to spin up the full Monte Carlo dashboard.
-- For live simulation monitoring, create a `LiveSimulationFeed` and pass it to `create_live_dashboard_app` to observe convergence and distributions in real time.
-- Export static artefacts with `src.reporting.ReportGenerator.export_monte_carlo_visuals` (uses Plotly+Kaleido).

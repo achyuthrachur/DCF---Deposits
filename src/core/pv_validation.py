@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Mapping, Optional, Union
+from typing import Dict, Iterable, Mapping, Optional
 
 import numpy as np
 import pandas as pd
 
 from ..models.assumptions import SegmentAssumptions
-from .discount import DiscountCurve
-from .yield_curve import YieldCurve
 
 
 def calculate_expected_pv_ratio(
@@ -53,19 +51,6 @@ def calculate_expected_pv_ratio(
     }
 
 
-def _resolve_discount_curve(
-    source: Union[DiscountCurve, YieldCurve, float]
-) -> DiscountCurve:
-    """Normalise discount curve inputs to a DiscountCurve instance."""
-    if isinstance(source, DiscountCurve):
-        return source
-    if isinstance(source, YieldCurve):
-        return DiscountCurve(source)
-    if isinstance(source, (int, float)):
-        return DiscountCurve.from_single_rate(float(source))
-    raise TypeError("discount_curve must be DiscountCurve, YieldCurve, or numeric rate.")
-
-
 def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure canonical column names are present for validation."""
     rename_map = {
@@ -94,7 +79,7 @@ def validate_pv_results(
     df_results: pd.DataFrame,
     df_original: pd.DataFrame,
     assumptions: Mapping[str, SegmentAssumptions],
-    discount_curve: Union[DiscountCurve, YieldCurve, float],
+    discount_rate: float,
     projection_months: int,
 ) -> Dict[str, object]:
     """Validate PV output against dynamic expectations."""
@@ -124,13 +109,10 @@ def validate_pv_results(
     avg_decay = _average_decay_rate(assumptions)
     avg_rate = float(merged["interest_rate"].mean() or 0.0)
 
-    resolved_curve = _resolve_discount_curve(discount_curve)
-    horizon_rate = resolved_curve.rate_for_month(projection_months)
-
     expected = calculate_expected_pv_ratio(
         decay_rate=avg_decay,
         projection_months=projection_months,
-        discount_rate=horizon_rate,
+        discount_rate=discount_rate,
         avg_interest_rate=avg_rate,
     )
 

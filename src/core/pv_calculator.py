@@ -2,41 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Union
-
 import pandas as pd
 
 from .discount import DiscountCurve
-from .yield_curve import YieldCurve
 
 
 class PresentValueCalculator:
     """Compute discounted values from projected cash flows."""
 
-    def __init__(
-        self,
-        discount_source: Union[DiscountCurve, YieldCurve, float],
-        *,
-        interpolation_method: str = "linear",
-    ) -> None:
-        if isinstance(discount_source, DiscountCurve):
-            self.discount_curve = discount_source
-        elif isinstance(discount_source, YieldCurve):
-            self.discount_curve = DiscountCurve(discount_source)
-        elif isinstance(discount_source, (int, float)):
-            self.discount_curve = DiscountCurve.from_single_rate(
-                float(discount_source),
-                interpolation_method=interpolation_method,
-            )
-        else:
-            raise TypeError(
-                "discount_source must be a DiscountCurve, YieldCurve, or numeric rate."
-            )
-
-    @property
-    def yield_curve(self) -> YieldCurve:
-        """Expose the underlying yield curve."""
-        return self.discount_curve.yield_curve
+    def __init__(self, discount_curve: DiscountCurve) -> None:
+        self.discount_curve = discount_curve
 
     def account_level_pv(self, cashflows: pd.DataFrame) -> pd.DataFrame:
         """Return account-level PV based on the provided cash flows."""
