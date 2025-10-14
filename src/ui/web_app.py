@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from base64 import b64encode
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -133,6 +134,19 @@ def _decimalize(value: float) -> float:
     if value > 1.5:
         return value / 100.0
     return value
+
+
+@st.cache_data(show_spinner=False)
+def _load_logo_data_uri() -> Optional[str]:
+    """Return the Crowe brand mark as a base64 data URI for embedding."""
+    logo_path = PROJECT_ROOT / "assets" / "crowe_logo.svg"
+    if not logo_path.exists():
+        return None
+    try:
+        encoded = b64encode(logo_path.read_bytes()).decode("utf-8")
+    except OSError:
+        return None
+    return f"data:image/svg+xml;base64,{encoded}"
 
 
 def _derive_segments(
@@ -383,6 +397,18 @@ def main() -> None:
             background: linear-gradient(180deg, #0f2d63 0%, #133f7f 45%, #0f2d63 100%);
             color: #ffffff;
         }
+        .brand-badge {
+            position: fixed;
+            top: 18px;
+            right: 28px;
+            z-index: 1100;
+            padding: 6px 10px;
+        }
+        .brand-badge img {
+            max-width: 150px;
+            height: auto;
+            filter: drop-shadow(0 4px 10px rgba(0,0,0,0.35));
+        }
         .hero-card {
             background: rgba(19, 63, 127, 0.70);
             border: 1px solid rgba(255, 194, 61, 0.5);
@@ -542,6 +568,13 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+    logo_data_uri = _load_logo_data_uri()
+    if logo_data_uri:
+        st.markdown(
+            f"<div class='brand-badge'><img src='{logo_data_uri}' alt='Crowe logo'></div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown(
         """
