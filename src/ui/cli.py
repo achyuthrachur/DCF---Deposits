@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.engine import ALMEngine
+from src.integration import FREDYieldCurveLoader
 from src.reporting import ReportGenerator
 
 app = typer.Typer(help="Non-maturity deposit ALM cash flow projection engine")
@@ -201,22 +202,19 @@ def _prompt_scenario_selection() -> tuple[Dict[str, bool], Optional[Dict[str, fl
         "parallel_minus_200": typer.confirm("-200 bps parallel shock?", default=False),
         "parallel_minus_300": typer.confirm("-300 bps parallel shock?", default=False),
         "parallel_minus_400": typer.confirm("-400 bps parallel shock?", default=False),
+        "steepener": typer.confirm("Curve steepener (short down / long up)?", default=False),
+        "flattener": typer.confirm("Curve flattener (short up / long down)?", default=False),
+        "short_shock_up": typer.confirm("Short rate shock up scenario?", default=False),
     }
     monte_carlo_config: Optional[Dict[str, float]] = None
     if typer.confirm("Run Monte Carlo simulation?", default=False):
         scenarios["monte_carlo"] = True
-        num_sim = int(
-            typer.prompt("Number of simulations", default="1000")
-        )
-        vol_bps = float(
-            typer.prompt("Quarterly volatility (bps)", default="25")
-        )
-        drift_bps = float(
-            typer.prompt("Quarterly drift (bps)", default="0")
-        )
+        num_sim = int(typer.prompt("Number of simulations", default="1000"))
+        vol_bps = float(typer.prompt("Quarterly volatility (bps)", default="25"))
+        drift_bps = float(typer.prompt("Quarterly drift (bps)", default="0"))
         symmetric = typer.confirm("Use symmetric shocks (pair +Z/-Z)?", default=False)
         opposite_drift = typer.confirm("Pair opposite drift signs?", default=False)
-        fixed_mag = typer.confirm("Use fixed ±vol shocks (Rademacher)?", default=False)
+        fixed_mag = typer.confirm("Use fixed magnitude shocks (Rademacher)?", default=False)
         seed_value = typer.prompt("Random seed (leave blank for random)", default="")
         monte_carlo_config = {
             "num_simulations": num_sim,
@@ -291,13 +289,50 @@ def run(
             engine.set_assumptions(segment, **values)
 
     console.print("\n[bold]Discount Rate Configuration[/bold]")
-    if typer.confirm("Use a single discount rate for all periods?", default=True):
+    console.print("1) Single discount rate (simple)")
+    console.print("2) Fetch current Treasury curve from FRED (recommended)")
+    console.print("3) Manual yield curve entry")
+    option = typer.prompt("Choose option [1/2/3]", default="2").strip()
+    interpolation = (
+        typer.prompt("Interpolation method (linear/cubic/log-linear)", default="linear")
+        .strip()
+        .lower()
+    )
+    if interpolation not in {"linear", "cubic", "log-linear"}:
+        raise typer.BadParameter("Interpolation method must be linear, cubic, or log-linear.")
+
+    if option == "1":
         rate = _as_decimal(typer.prompt("Discount rate (annual decimal)", default="0.035"))
-        engine.set_discount_single_rate(rate)
-    else:
-        console.print("Enter rates for tenors in months (leave blank to skip):")
+        engine.set_discount_single_rate(rate, interpolation_method=interpolation)
+    elif option == "2":
+        api_key = typer.prompt(
+            "FRED API key",
+            default="",
+        ).strip()
+        if not api_key:
+            raise typer.BadParameter("FRED API key is required for option 2.")
+        try:
+            loader = FREDYieldCurveLoader(api_key)
+            curve = loader.get_current_yield_curve(interpolation_method=interpolation)
+            fetch_date = loader.last_fetch_date.strftime("%Y-%m-%d") if loader.last_fetch_date else "latest"
+            console.print(f"\nFetched curve as of {fetch_date}:")
+            for tenor, rate in zip(curve.tenors, curve.rates):
+                console.print(f"  {int(tenor):>3}M -> {rate * 100:.2f}%")
+            masked_key = api_key if len(api_key) <= 8 else f"{api_key[:4]}...{api_key[-4:]}"
+            engine.set_discount_curve_object(
+                curve,
+                source="fred",
+                extra_metadata={
+                    "fred_api_key": masked_key,
+                    "last_updated": fetch_date,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - network guard
+            raise typer.BadParameter(f"Unable to fetch yield curve from FRED: {exc}") from exc
+    elif option == "3":
+        console.print("Enter rates for tenors in months (leave blank to skip). Percentages accepted.")
         tenor_map: Dict[int, float] = {}
-        for tenor, label in [
+        tenor_labels = [
             (3, "3 Months"),
             (6, "6 Months"),
             (12, "1 Year"),
@@ -306,13 +341,16 @@ def run(
             (60, "5 Years"),
             (84, "7 Years"),
             (120, "10 Years"),
-        ]:
+        ]
+        for tenor, label in tenor_labels:
             value = typer.prompt(label, default="")
-            if value:
+            if value.strip():
                 tenor_map[tenor] = _as_decimal(value)
-        if not tenor_map:
-            raise typer.BadParameter("At least one tenor rate is required for yield curve mode.")
-        engine.set_discount_yield_curve(tenor_map)
+        if len(tenor_map) < 2:
+            raise typer.BadParameter("At least two tenor points are required for yield curve entry.")
+        engine.set_discount_yield_curve(tenor_map, interpolation_method=interpolation)
+    else:
+        raise typer.BadParameter("Invalid discount configuration option.")
 
     console.print("\n[bold]Base Market Rate[/bold]")
     base_rate = _as_decimal(

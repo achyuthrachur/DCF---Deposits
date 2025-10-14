@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
@@ -11,12 +11,25 @@ import pandas as pd
 from .core.cashflow_projector import CashflowProjector, ProjectionSettings
 from .core.data_loader import DataLoader, LoadResult
 from .core.discount import DiscountCurve
+from .core.monte_carlo import (
+    MonteCarloConfig,
+    MonteCarloLevel,
+    VasicekParams,
+    build_percentile_table,
+    expand_monthly_zero_rates,
+    generate_correlated_vasicek_paths,
+    generate_vasicek_path,
+    interpolate_curve_rates,
+)
+from .core.monte_carlo_validation import validate_distribution, validate_rate_paths
 from .core.pv_calculator import PresentValueCalculator
 from .core.pv_validation import validate_pv_results
 from .core.scenario_generator import assemble_standard_scenarios
+from .core.yield_curve import YieldCurve
 from .core.validator import ValidationError
 from .models.account import AccountRecord
 from .models.assumptions import AssumptionSet, SegmentAssumptions
+from .models.monte_carlo import MonteCarloProgressEvent
 from .models.results import EngineResults, ScenarioResult
 from .models.scenario import ScenarioDefinition, ScenarioSet, ScenarioType
 
@@ -27,6 +40,7 @@ class DiscountConfig:
 
     method: str
     curve: DiscountCurve
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ALMEngine:
@@ -41,7 +55,7 @@ class ALMEngine:
         self._discount_config: Optional[DiscountConfig] = None
         self._scenario_set = ScenarioSet()
         self.field_map: Dict[str, str] = {}
-        self._monte_carlo_config: Optional[Dict[str, Any]] = None
+        self._monte_carlo_config: Optional[MonteCarloConfig] = None
         self._source_dataframe: Optional["pd.DataFrame"] = None
 
     # --------------------------------------------------------------------- Data
@@ -128,15 +142,73 @@ class ALMEngine:
         return self._assumptions
 
     # ---------------------------------------------------------- Discount Rates
-    def set_discount_single_rate(self, rate: float) -> None:
+    def set_discount_single_rate(
+        self,
+        rate: float,
+        *,
+        interpolation_method: str = "linear",
+    ) -> None:
         """Set a flat discount rate."""
-        curve = DiscountCurve.from_single_rate(rate)
-        self._discount_config = DiscountConfig(method="single", curve=curve)
+        curve = DiscountCurve.from_single_rate(
+            rate,
+            interpolation_method=interpolation_method,
+        )
+        metadata = {
+            "source": "single_rate",
+            "rate": float(rate),
+            "interpolation_method": interpolation_method,
+        }
+        self._discount_config = DiscountConfig(
+            method="single",
+            curve=curve,
+            metadata=metadata,
+        )
 
-    def set_discount_yield_curve(self, tenor_rates: Dict[int, float]) -> None:
+    def set_discount_yield_curve(
+        self,
+        tenor_rates: Dict[int, float],
+        *,
+        interpolation_method: str = "linear",
+    ) -> None:
         """Set a term structure discount curve."""
-        curve = DiscountCurve.from_yield_curve(tenor_rates)
-        self._discount_config = DiscountConfig(method="yield_curve", curve=curve)
+        curve = DiscountCurve.from_yield_curve(
+            tenor_rates,
+            interpolation_method=interpolation_method,
+        )
+        metadata = {
+            "source": "manual",
+            "tenors": sorted(int(k) for k in tenor_rates),
+            "rates": [float(tenor_rates[k]) for k in sorted(tenor_rates)],
+            "interpolation_method": interpolation_method,
+        }
+        self._discount_config = DiscountConfig(
+            method="yield_curve",
+            curve=curve,
+            metadata=metadata,
+        )
+
+    def set_discount_curve_object(
+        self,
+        yield_curve: YieldCurve,
+        *,
+        source: str = "manual",
+        extra_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Set the discount curve directly from a YieldCurve instance."""
+        curve = DiscountCurve(yield_curve)
+        metadata = {
+            "source": source,
+            "tenors": yield_curve.tenors.tolist(),
+            "rates": yield_curve.rates.tolist(),
+            "interpolation_method": yield_curve.interpolation_method,
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        self._discount_config = DiscountConfig(
+            method="yield_curve",
+            curve=curve,
+            metadata=metadata,
+        )
 
     def discount_curve(self) -> DiscountCurve:
         """Return the configured discount curve."""
@@ -169,10 +241,12 @@ class ALMEngine:
     # ---------------------------------------------------------------- Scenarios
     def configure_standard_scenarios(self, selections: Dict[str, bool]) -> None:
         """Configure the scenario set using standard selections."""
+        base_discount_curve = self._discount_config.curve if self._discount_config else None
         self._scenario_set = assemble_standard_scenarios(
             selections=selections,
             projection_months=self.projection_months,
             monte_carlo_config=self._monte_carlo_config,
+            base_discount_curve=base_discount_curve,
         )
 
     def add_scenario(self, scenario: ScenarioDefinition) -> None:
@@ -185,40 +259,25 @@ class ALMEngine:
             self.configure_standard_scenarios({"base": True})
         return self._scenario_set
 
-    def set_monte_carlo_config(
-        self,
-        *,
-        num_simulations: int,
-        quarterly_volatility: float,
-        quarterly_drift: float = 0.0,
-        random_seed: Optional[int] = None,
-        symmetric_shocks: bool = False,
-        pair_opposite_drift: bool = False,
-        use_fixed_magnitude: bool = False,
-    ) -> None:
-        """Configure quarterly-based Monte Carlo simulation parameters."""
+    def set_monte_carlo_config(self, config: MonteCarloConfig) -> None:
+        """Register Monte Carlo configuration (levels 1 and 2)."""
 
-        if num_simulations <= 0:
+        if config.num_simulations <= 0:
             raise ValueError("num_simulations must be positive")
-        if quarterly_volatility < 0:
-            raise ValueError("quarterly_volatility must be non-negative")
-
-        self._monte_carlo_config = {
-            "num_simulations": int(num_simulations),
-            "quarterly_volatility": float(quarterly_volatility),
-            "quarterly_drift": float(quarterly_drift),
-            "random_seed": int(random_seed) if random_seed is not None else None,
-            "symmetric_shocks": bool(symmetric_shocks),
-            "pair_opposite_drift": bool(pair_opposite_drift),
-            "use_fixed_magnitude": bool(use_fixed_magnitude),
-        }
+        if config.level == MonteCarloLevel.TWO_FACTOR and config.long_rate is None:
+            raise ValueError("Two-factor Monte Carlo requires long_rate parameters.")
+        if config.level not in {MonteCarloLevel.STATIC_CURVE, MonteCarloLevel.TWO_FACTOR}:
+            raise ValueError(f"Unsupported Monte Carlo level: {config.level}")
+        self._monte_carlo_config = config
 
     # --------------------------------------------------------------- Execution
     def run_analysis(
         self,
         projection_months: Optional[int] = None,
-        progress_callback: Optional[
-            callable
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        *,
+        monte_carlo_observer: Optional[
+            Callable[[MonteCarloProgressEvent], None]
         ] = None,
     ) -> EngineResults:
         """Execute the projection engine for all configured scenarios."""
@@ -232,8 +291,7 @@ class ALMEngine:
             base_market_rates=self.market_rate_path(),
         )
         projector = CashflowProjector(self._assumptions)
-        discount_curve = self.discount_curve()
-        pv_calculator = PresentValueCalculator(discount_curve)
+        base_discount_curve = self.discount_curve()
 
         scenario_plan = self.scenario_set().scenarios
         total_accounts = max(len(self.accounts), 1)
@@ -292,14 +350,15 @@ class ALMEngine:
                     scenario=scenario,
                     projector=projector,
                     settings=settings,
-                    pv_calculator=pv_calculator,
-                    progress_callback=lambda s, _t, m: emit_progress(s, m),
+                    pv_calculator=PresentValueCalculator(base_discount_curve),
+                    progress_callback=lambda s, t, m: emit_progress(s, m),
                     step_offset=current_step,
                     total_steps=total_steps,
                     total_accounts=total_accounts,
                     scenario_index=index,
                     total_scenarios=total_scenarios,
                     simulation_callback=simulation_progress,
+                    progress_observer=monte_carlo_observer,
                 )
                 current_step += scenario_steps
             else:
@@ -320,6 +379,12 @@ class ALMEngine:
                         ),
                     )
 
+                scenario_discount_curve = self._discount_curve_for_scenario(
+                    scenario=scenario,
+                    base_curve=base_discount_curve,
+                )
+                pv_calculator = PresentValueCalculator(scenario_discount_curve)
+
                 cashflows = projector.project(
                     self.accounts,
                     scenario,
@@ -333,7 +398,10 @@ class ALMEngine:
                     cashflows=cashflows,
                     present_value=portfolio_pv,
                     account_level_pv=account_pv,
-                    metadata={"method": scenario.scenario_type.value},
+                    metadata={
+                        "method": scenario.scenario_type.value,
+                        "discount_curve": scenario_discount_curve.yield_curve.to_dict(),
+                    },
                 )
                 current_step += scenario_steps
             results.add_result(scenario_result)
@@ -345,14 +413,11 @@ class ALMEngine:
         ):
             try:
                 base_result = results.scenario_results[results.base_scenario_id]
-                discount_rate = float(
-                    self.discount_curve().rate_for_month(self.projection_months)
-                )
                 validation = validate_pv_results(
                     df_results=base_result.account_level_pv,
                     df_original=self._source_dataframe,
                     assumptions=self._assumptions.segments,
-                    discount_rate=discount_rate,
+                    discount_curve=base_discount_curve,
                     projection_months=self.projection_months,
                 )
                 results.validation_summary = validation
@@ -382,12 +447,37 @@ class ALMEngine:
             # Nothing to validate unless Monte Carlo requested later.
             return
 
+    def _discount_curve_for_scenario(
+        self,
+        *,
+        scenario: ScenarioDefinition,
+        base_curve: DiscountCurve,
+    ) -> DiscountCurve:
+        """Return the discount curve to use for a scenario."""
+        metadata = scenario.metadata or {}
+        curve_payload = metadata.get("yield_curve")
+        if not curve_payload:
+            return base_curve
+        try:
+            tenors = curve_payload["tenors"]
+            rates = curve_payload["rates"]
+            interpolation_method = curve_payload.get("interpolation_method", "linear")
+            scenario_curve = YieldCurve(
+                tenors=tenors,
+                rates=rates,
+                interpolation_method=interpolation_method,
+            )
+            return DiscountCurve(scenario_curve)
+        except Exception:
+            # Fall back to base curve if payload is malformed.
+            return base_curve
+
+
     def _run_monte_carlo(
         self,
         scenario: ScenarioDefinition,
         projector: CashflowProjector,
         settings: ProjectionSettings,
-        pv_calculator: PresentValueCalculator,
         *,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         step_offset: int = 0,
@@ -396,235 +486,331 @@ class ALMEngine:
         scenario_index: int = 1,
         total_scenarios: int = 1,
         simulation_callback: Optional[Callable[[int, int], None]] = None,
+        progress_observer: Optional[Callable[[MonteCarloProgressEvent], None]] = None,
     ) -> ScenarioResult:
-        """Execute Monte Carlo simulations and aggregate results."""
+        """Execute Level 1/2 Monte Carlo simulations and aggregate results."""
         import pandas as pd
 
-        config = scenario.metadata
-        num_sim = int(config.get("num_simulations", 0))
-        if num_sim <= 0:
-            raise ValidationError("Monte Carlo configuration requires num_simulations > 0")
-        if "quarterly_volatility" in config:
-            vol_q = float(config.get("quarterly_volatility", 0.0))
-            drift_q = float(config.get("quarterly_drift", 0.0))
-        else:  # Backwards compatibility with monthly inputs
-            vol_q = float(config.get("monthly_volatility", 0.0)) * np.sqrt(3.0)
-            drift_q = float(config.get("monthly_drift", 0.0)) * 3.0
-        seed = config.get("random_seed")
+        config = MonteCarloConfig.from_metadata(dict(scenario.metadata or {}))
+        months = min(config.projection_months, settings.projection_months)
+        if months <= 0:
+            raise ValidationError("Monte Carlo projection horizon must be positive.")
 
-        symmetric_shocks = bool(config.get("symmetric_shocks", False))
-        pair_opposite_drift = bool(config.get("pair_opposite_drift", False))
-        use_fixed_magnitude = bool(config.get("use_fixed_magnitude", False))
+        base_curve = self.discount_curve()
+        base_market_rates = np.array(settings.base_market_rates[:months], dtype=float)
+        if base_market_rates.size < months:
+            last_rate = float(base_market_rates[-1])
+            extension = np.full(months - base_market_rates.size, last_rate, dtype=float)
+            base_market_rates = np.concatenate([base_market_rates, extension])
+        months_range = np.arange(1, months + 1)
 
-        rng = np.random.default_rng(seed)
-        months = settings.projection_months
-        quarter_count = int(np.ceil(months / 3))
-        month_index = np.arange(1, months + 1)
-        quarter_index = np.arange(1, quarter_count + 1)
-        base_path = np.array(settings.base_market_rates[:months], dtype=float)
+        short_params = config.short_rate
+        short_initial = (
+            short_params.initial_rate
+            if short_params.initial_rate is not None
+            else float(base_market_rates[0])
+        )
+        short_params = short_params.with_initial(short_initial)
 
-        principal_sum = np.zeros(months)
-        interest_sum = np.zeros(months)
-        total_sum = np.zeros(months)
-        pv_values = np.zeros(num_sim)
-        rate_paths = np.zeros((num_sim, months))
+        long_params = None
+        if config.level == MonteCarloLevel.TWO_FACTOR:
+            if config.long_rate is None:
+                raise ValidationError("Two-factor Monte Carlo requires long-rate parameters.")
+            long_initial = (
+                config.long_rate.initial_rate
+                if config.long_rate.initial_rate is not None
+                else float(base_curve.rate_for_month(120))
+            )
+            long_params = config.long_rate.with_initial(long_initial)
 
-        def build_shocks_matrix() -> np.ndarray:
-            if use_fixed_magnitude:
-                signs = rng.choice([-1.0, 1.0], size=(num_sim, quarter_count))
-                base = np.abs(vol_q) * signs
-                if pair_opposite_drift:
-                    drift_signs = np.where((np.arange(num_sim) % 2) == 0, 1.0, -1.0).reshape(-1, 1)
-                    drift_part = drift_signs * np.abs(drift_q)
-                else:
-                    drift_part = np.full((num_sim, quarter_count), drift_q)
-                return drift_part + base
+        rng = np.random.default_rng(config.random_seed)
+        mc_settings = ProjectionSettings(
+            projection_months=months,
+            segmentation_method=settings.segmentation_method,
+            base_market_rates=tuple(base_market_rates.tolist()),
+        )
 
-            if symmetric_shocks:
-                half = (num_sim + 1) // 2
-                Z = rng.standard_normal(size=(half, quarter_count))
-                pos = drift_q + vol_q * Z
-                neg = drift_q - vol_q * Z
-                mat = np.vstack([pos, neg])[:num_sim]
+        pv_values = np.zeros(config.num_simulations, dtype=float)
+        principal_sum = np.zeros(months, dtype=float)
+        interest_sum = np.zeros(months, dtype=float)
+        total_sum = np.zeros(months, dtype=float)
+
+        progress_records: List[Dict[str, float]] = []
+        sample_indices = (
+            np.linspace(
+                0,
+                config.num_simulations - 1,
+                min(config.sample_size, config.num_simulations),
+            ).astype(int)
+            if config.save_rate_paths and config.sample_size > 0
+            else np.array([], dtype=int)
+        )
+        sample_set = set(sample_indices.tolist())
+        rate_sample_rows: List[Dict[str, float]] = []
+
+        validation_short_paths: List[np.ndarray] = []
+        validation_long_paths: List[np.ndarray] = []
+        validation_sample_limit = min(200, config.num_simulations)
+
+        current_step = step_offset
+        for sim_index in range(config.num_simulations):
+            message = (
+                f"Scenario {scenario_index}/{total_scenarios}: "
+                f"simulation {sim_index + 1}/{config.num_simulations}"
+            )
+            if progress_callback:
+                try:
+                    progress_callback(current_step, total_steps, message)
+                except Exception:  # pragma: no cover
+                    pass
+            if simulation_callback:
+                try:
+                    simulation_callback(sim_index + 1, config.num_simulations)
+                except Exception:  # pragma: no cover
+                    pass
+
+            if config.level == MonteCarloLevel.STATIC_CURVE:
+                short_path = generate_vasicek_path(short_params, months, rng)
+                long_path = None
+                monthly_discount_rates = [float(base_curve.rate_for_month(month)) for month in months_range]
+                discount_curve = base_curve
             else:
-                mat = rng.normal(loc=drift_q, scale=vol_q, size=(num_sim, quarter_count))
+                assert long_params is not None
+                short_path, long_path = generate_correlated_vasicek_paths(
+                    short_params, long_params, config.correlation, months, rng
+                )
+                monthly_discount_rates: List[float] = []
+                for month_idx in range(months):
+                    tenor_rates = interpolate_curve_rates(
+                        short_rate=float(short_path[month_idx]),
+                        long_rate=float(long_path[month_idx]),
+                        base_curve=base_curve,
+                        short_tenor=3,
+                        long_tenor=120,
+                    )
+                    yc = YieldCurve(
+                        list(tenor_rates.keys()),
+                        list(tenor_rates.values()),
+                        interpolation_method=config.interpolation_method,
+                    )
+                    monthly_discount_rates.append(float(yc.get_rate(month_idx + 1)))
+                    if config.save_rate_paths and sim_index in sample_set:
+                        rate_sample_rows.append(
+                            {
+                                "simulation": sim_index + 1,
+                                "month": month_idx + 1,
+                                "short_rate": float(short_path[month_idx]),
+                                "long_rate": float(long_path[month_idx]),
+                                "curve_3m": float(yc.get_rate(3)),
+                                "curve_12m": float(yc.get_rate(12)),
+                                "curve_60m": float(yc.get_rate(60)),
+                                "curve_120m": float(yc.get_rate(120)),
+                            }
+                        )
+                discount_curve = DiscountCurve.from_yield_curve(
+                    {int(month): rate for month, rate in zip(months_range, monthly_discount_rates)},
+                    interpolation_method=config.interpolation_method,
+                )
 
-            if pair_opposite_drift:
-                drift_signs = np.where((np.arange(num_sim) % 2) == 0, 1.0, -1.0).reshape(-1, 1)
-                mat = (mat - drift_q) + drift_signs * np.abs(drift_q)
-            return mat
+            if config.save_rate_paths and config.level == MonteCarloLevel.STATIC_CURVE and sim_index in sample_set:
+                for month_idx in range(months):
+                    rate_sample_rows.append(
+                        {
+                            "simulation": sim_index + 1,
+                            "month": month_idx + 1,
+                            "short_rate": float(short_path[month_idx]),
+                            "discount_rate": float(monthly_discount_rates[month_idx]),
+                        }
+                    )
 
-        quarterly_shocks_matrix = build_shocks_matrix()
+            if len(validation_short_paths) < validation_sample_limit:
+                validation_short_paths.append(short_path.copy())
+                if config.level == MonteCarloLevel.TWO_FACTOR and long_path is not None:
+                    validation_long_paths.append(long_path.copy())
 
-        for idx in range(num_sim):
-            quarterly_shocks = quarterly_shocks_matrix[idx]
-            cumulative_quarters = np.cumsum(quarterly_shocks)
-            monthly_levels = np.repeat(cumulative_quarters, 3)[:months]
             shock_vector = {
-                int(month): float(shock)
-                for month, shock in zip(month_index, monthly_levels)
+                int(month): float(short_path[month - 1] - base_market_rates[month - 1])
+                for month in months_range
             }
             sim_scenario = ScenarioDefinition(
-                scenario_id=f"{scenario.scenario_id}_sim_{idx + 1}",
+                scenario_id=f"{scenario.scenario_id}_sim_{sim_index + 1}",
                 scenario_type=ScenarioType.CUSTOM,
                 shock_vector=shock_vector,
                 description="Monte Carlo simulation path",
             )
-            sim_offset = step_offset + idx * total_accounts
-            rate_paths[idx] = np.maximum(0.0, base_path + monthly_levels)
-
-            if progress_callback or simulation_callback:
-                message = (
-                    f"Scenario {scenario_index}/{total_scenarios}: "
-                    f"simulation {idx + 1}/{num_sim}"
-                )
-                if progress_callback:
-                    try:
-                        progress_callback(sim_offset, total_steps, message)
-                    except Exception:  # pragma: no cover
-                        pass
-                if simulation_callback:
-                    try:
-                        simulation_callback(idx + 1, num_sim)
-                    except Exception:  # pragma: no cover
-                        pass
 
             cashflows = projector.project(
                 self.accounts,
                 sim_scenario,
-                settings,
+                mc_settings,
             )
 
-            if progress_callback:
-                unique_accounts = cashflows["account_id"].unique()
-                for account_idx, account_id in enumerate(unique_accounts, start=1):
-                    current = sim_offset + account_idx
-                    message = (
-                        f"Scenario {scenario_index}/{total_scenarios}: "
-                        f"simulation {idx + 1}/{num_sim}, "
-                        f"account {account_idx}/{len(unique_accounts)} ({account_id})"
-                    )
-                    try:
-                        progress_callback(current, total_steps, message)
-                    except Exception:  # pragma: no cover
-                        pass
+            pv_calculator = PresentValueCalculator(discount_curve)
+            pv_value = pv_calculator.portfolio_pv(cashflows)
+            pv_values[sim_index] = pv_value
 
-            if progress_callback:
-                safe_step = max(0, min(total_steps, sim_offset + total_accounts))
-                try:
-                    progress_callback(
-                        safe_step,
-                        total_steps,
-                        f"Scenario {scenario_index}/{total_scenarios}: simulation {idx + 1}/{num_sim}",
-                    )
-                except Exception:  # pragma: no cover
-                    pass
-
-            pv_values[idx] = pv_calculator.portfolio_pv(cashflows)
             monthly_totals = (
-                cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
+                cashflows.groupby("month")["principal", "interest", "total_cash_flow"]
                 .sum()
-                .reindex(month_index, fill_value=0.0)
+                .reindex(months_range, fill_value=0.0)
             )
             principal_sum += monthly_totals["principal"].to_numpy()
             interest_sum += monthly_totals["interest"].to_numpy()
             total_sum += monthly_totals["total_cash_flow"].to_numpy()
 
-        expected_cashflows = pd.DataFrame(
-            {
-                "month": month_index,
-                "expected_principal": principal_sum / num_sim,
-                "expected_interest": interest_sum / num_sim,
-                "expected_total": total_sum / num_sim,
+            cumulative_series = pd.Series(pv_values[: sim_index + 1])
+            cumulative_mean = float(cumulative_series.mean())
+            cumulative_std = float(cumulative_series.std(ddof=1)) if sim_index > 0 else 0.0
+            percentile_snapshot = {
+                "p05": float(cumulative_series.quantile(0.05)),
+                "p50": float(cumulative_series.quantile(0.50)),
+                "p95": float(cumulative_series.quantile(0.95)),
             }
-        )
-
-        pv_series = pd.Series(pv_values)
-        pv_stats = pd.DataFrame(
-            {
-                "statistic": ["mean", "std", "p05", "p50", "p95", "min", "max"],
-                "value": [
-                    float(pv_series.mean()),
-                    float(pv_series.std(ddof=1) if num_sim > 1 else 0.0),
-                    float(pv_series.quantile(0.05)),
-                    float(pv_series.quantile(0.50)),
-                    float(pv_series.quantile(0.95)),
-                    float(pv_series.min()),
-                    float(pv_series.max()),
-                ],
-            }
-        )
-
-        extra_tables = {
-            "simulation_pv": pd.DataFrame(
-                {"simulation": np.arange(1, num_sim + 1), "present_value": pv_values}
+            progress_records.append(
+                {
+                    "simulation": sim_index + 1,
+                    "present_value": float(pv_value),
+                    "cumulative_mean": cumulative_mean,
+                    "cumulative_std": cumulative_std,
+                    **percentile_snapshot,
+                }
             )
-        }
+            if progress_observer:
+                try:
+                    progress_observer(
+                        MonteCarloProgressEvent(
+                            scenario_id=scenario.scenario_id,
+                            simulation_index=sim_index + 1,
+                            total_simulations=config.num_simulations,
+                            present_value=float(pv_value),
+                            cumulative_mean=cumulative_mean,
+                            cumulative_std=cumulative_std,
 
-        sample_size = min(num_sim, 500)
-        sample_indices = (
-            np.linspace(0, num_sim - 1, sample_size).astype(int)
-            if sample_size > 0
-            else np.array([], dtype=int)
-        )
-        if sample_size:
-            sample_df = pd.DataFrame(
-                rate_paths[sample_indices],
-                columns=[f"month_{i+1}" for i in range(months)],
+                MonteCarloProgressEvent(
+                    scenario_id=scenario.scenario_id,
+                    simulation_index=sim_index + 1,
+                    total_simulations=config.num_simulations,
+                    present_value=float(pv_value),
+                    cumulative_mean=cumulative_mean,
+                    cumulative_std=cumulative_std,
+                    percentile_estimates=percentile_snapshot,
+                    rate_path=short_path.tolist(),
+                )
             )
-            sample_df.insert(0, "simulation", sample_indices + 1)
-            extra_tables["rate_paths_sample"] = sample_df
+        except Exception:  # pragma: no cover
+            pass
 
-        rate_summary = pd.DataFrame({
-            "month": month_index,
-            "mean": rate_paths.mean(axis=0),
-            "p01": np.percentile(rate_paths, 1, axis=0),
-            "p05": np.percentile(rate_paths, 5, axis=0),
-            "p10": np.percentile(rate_paths, 10, axis=0),
-            "p25": np.percentile(rate_paths, 25, axis=0),
-            "p50": np.percentile(rate_paths, 50, axis=0),
-            "p75": np.percentile(rate_paths, 75, axis=0),
-            "p90": np.percentile(rate_paths, 90, axis=0),
-            "p95": np.percentile(rate_paths, 95, axis=0),
-            "p99": np.percentile(rate_paths, 99, axis=0),
-            "min": rate_paths.min(axis=0),
-            "max": rate_paths.max(axis=0),
-            "base_rate": base_path,
-        })
-        extra_tables["rate_paths_summary"] = rate_summary
-        pv_percentiles = {
-            "mean": float(pv_series.mean()),
-            "std": float(pv_series.std(ddof=1) if num_sim > 1 else 0.0),
-            "min": float(pv_series.min()),
-            "max": float(pv_series.max()),
-            "p1": float(pv_series.quantile(0.01)),
-            "p5": float(pv_series.quantile(0.05)),
-            "p10": float(pv_series.quantile(0.10)),
-            "p25": float(pv_series.quantile(0.25)),
-            "p50": float(pv_series.quantile(0.50)),
-            "p75": float(pv_series.quantile(0.75)),
-            "p90": float(pv_series.quantile(0.90)),
-            "p95": float(pv_series.quantile(0.95)),
-            "p99": float(pv_series.quantile(0.99)),
+    if progress_callback:
+        current_step = min(step_offset + (sim_index + 1) * total_accounts, total_steps)
+        try:
+            progress_callback(
+                current_step,
+                total_steps,
+                f"Scenario {scenario_index}/{total_scenarios}: simulation {sim_index + 1}/{config.num_simulations}",
+            )
+        except Exception:  # pragma: no cover
+            pass
+
+expected_cashflows = pd.DataFrame(
+    {
+        "month": months_range,
+        "expected_principal": principal_sum / config.num_simulations,
+        "expected_interest": interest_sum / config.num_simulations,
+        "expected_total": total_sum / config.num_simulations,
+    }
+)
+
+pv_series = pd.Series(pv_values)
+percentiles = {
+    "p1": float(pv_series.quantile(0.01)),
+    "p5": float(pv_series.quantile(0.05)),
+    "p10": float(pv_series.quantile(0.10)),
+    "p25": float(pv_series.quantile(0.25)),
+    "p50": float(pv_series.quantile(0.50)),
+    "p75": float(pv_series.quantile(0.75)),
+    "p90": float(pv_series.quantile(0.90)),
+    "p95": float(pv_series.quantile(0.95)),
+    "p99": float(pv_series.quantile(0.99)),
+}
+mean_pv = float(pv_series.mean())
+std_pv = float(pv_series.std(ddof=1)) if config.num_simulations > 1 else 0.0
+skew_pv = float(pv_series.skew())
+kurt_pv = float(pv_series.kurt())
+
+book_value = None
+if self._source_dataframe is not None and "balance" in self._source_dataframe.columns:
+    book_value = float(self._source_dataframe["balance"].sum())
+
+var_95 = book_value - percentiles["p5"] if book_value is not None else None
+cvar_mask = pv_series <= percentiles["p5"]
+cvar_95 = float(pv_series[cvar_mask].mean()) if cvar_mask.any() else percentiles["p5"]
+prob_below_book = (
+    float((pv_series < book_value).mean()) if book_value is not None else None
+)
+
+summary_row = {
+    "mean": mean_pv,
+    "median": percentiles["p50"],
+    "p1": percentiles["p1"],
+    "p5": percentiles["p5"],
+    "p25": percentiles["p25"],
+    "p75": percentiles["p75"],
+    "p95": percentiles["p95"],
+    "p99": percentiles["p99"],
+    "std": std_pv,
+    "skew": skew_pv,
+    "kurtosis": kurt_pv,
+    "var_95": var_95,
+    "cvar_95": cvar_95,
+    "prob_below_book": prob_below_book,
+}
+summary_df = pd.DataFrame([summary_row])
+
+distribution_df = pd.DataFrame(
+    {"simulation": np.arange(1, config.num_simulations + 1), "portfolio_pv": pv_values}
+)
+percentiles_df = build_percentile_table(pv_values, percentiles=range(5, 100, 5))
+
+rate_validation = validate_rate_paths(
+    validation_short_paths,
+    long_paths=validation_long_paths if validation_long_paths else None,
+    long_term_mean=config.short_rate.long_term_mean,
+)
+dist_validation = validate_distribution(pv_values, book_value=book_value)
+
+summary_metadata = {
+    "method": scenario.scenario_type.value,
+    "level": int(config.level),
+    "config": config.to_metadata(),
+    "summary": summary_row,
+}
+
+extra_tables: Dict[str, pd.DataFrame] = {
+    "simulation_pv": distribution_df,
+    "summary_table": summary_df,
+    "percentiles_table": percentiles_df,
+}
+if rate_sample_rows:
+    extra_tables["rate_paths_sample"] = pd.DataFrame(rate_sample_rows)
+if progress_records:
+    extra_tables["simulation_progress"] = pd.DataFrame(progress_records)
+
+extra_tables["validation"] = pd.DataFrame(
+    [
+        {
+            "rates_status": rate_validation.status,
+            "distribution_status": dist_validation.status,
+            "rate_warnings": "|".join(rate_validation.warnings),
+            "distribution_warnings": "|".join(dist_validation.warnings),
         }
+    ]
+)
 
-        metadata = {
-            "method": scenario.scenario_type.value,
-            "num_simulations": num_sim,
-            "quarterly_volatility": vol_q,
-            "quarterly_drift": drift_q,
-            "random_seed": seed,
-            "symmetric_shocks": symmetric_shocks,
-            "pair_opposite_drift": pair_opposite_drift,
-            "use_fixed_magnitude": use_fixed_magnitude,
-            "pv_percentiles": pv_percentiles,
-        }
-
-        return ScenarioResult(
-            scenario_id=scenario.scenario_id,
-            cashflows=expected_cashflows,
-            present_value=float(pv_series.mean()),
-            account_level_pv=pv_stats,
-            metadata=metadata,
-            extra_tables=extra_tables,
-        )
+return ScenarioResult(
+    scenario_id=scenario.scenario_id,
+    cashflows=expected_cashflows,
+    present_value=mean_pv,
+    account_level_pv=summary_df,
+    metadata=summary_metadata,
+    extra_tables=extra_tables,
+)
