@@ -16,9 +16,15 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 
 ## Getting Started
 1. Install dependencies:
-   ```bash
-   python -m pip install -r requirements.txt
    ```
+src/
+|-- core/          # Calculation engines (cash flows, PV, scenarios)
+|-- models/        # Pydantic models for accounts, assumptions, scenarios, results
+|-- reporting/     # CSV export helpers
+|-- ui/            # Typer CLI for manual data entry
+```
+
+
 2. Run the interactive CLI:
    ```bash
    python -m src.ui.cli run path/to/data.csv
@@ -51,11 +57,12 @@ cashflow, and account-level PV CSVs.
 ## Project Structure
 ```
 src/
-├── core/          # Calculation engines (cash flows, PV, scenarios)
-├── models/        # Pydantic models for accounts, assumptions, scenarios, results
-├── reporting/     # CSV export helpers
-└── ui/            # Typer CLI for manual data entry
+|-- core/          # Calculation engines (cash flows, PV, scenarios)
+|-- models/        # Pydantic models for accounts, assumptions, scenarios, results
+|-- reporting/     # CSV export helpers
+|-- ui/            # Typer CLI for manual data entry
 ```
+
 
 ## Sharing with Collaborators
 To publish a shareable web link, deploy the Streamlit app:
@@ -64,7 +71,7 @@ To publish a shareable web link, deploy the Streamlit app:
 2. Sign in to [Streamlit Community Cloud](https://streamlit.io/cloud) (free tier available).
 3. Create a new app, selecting your repository and the `src/ui/web_app.py` entry point.
 4. Streamlit Cloud automatically installs dependencies from `requirements.txt` and launches
-   the app. Copy the generated URL and share it with collaborators—they can access the tool
+   the app. Copy the generated URL and share it with collaborators-they can access the tool
    directly from their browser without installing anything locally.
 
 Alternative hosting options include Streamlit on AWS/GCP/Azure, containerising with Docker
@@ -72,7 +79,7 @@ and serving via services like Azure Container Apps, or embedding the engine behi
 service with a custom frontend. Streamlit Cloud offers the fastest path to a working link.
 
 ## Next Steps
-- Extend segmentation to support cross-segmentation (account × customer) with assumption presets.
+- Extend segmentation to support cross-segmentation (account -- customer) with assumption presets.
 - Add advanced scenarios (steepener/flattener, ramps, Monte Carlo).
 - Harden the Streamlit UX (assumption templates, saved profiles, richer visuals).
 - Build comprehensive unit test coverage using `pytest`.

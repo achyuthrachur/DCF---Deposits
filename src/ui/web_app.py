@@ -256,7 +256,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
     for segment in segments:
         defaults = _default_for_segment(segment)
         decay = st.number_input(
-            f"{segment} â€' Decay / Runoff Rate (annual decimal)",
+            f"{segment} ' Decay / Runoff Rate (annual decimal)",
             min_value=0.0,
             max_value=1.0,
             value=defaults["decay_rate"],
@@ -264,7 +264,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
             key=f"decay_{segment}",
         )
         wal = st.number_input(
-            f"{segment} â€' Weighted Average Life (years)",
+            f"{segment} ' Weighted Average Life (years)",
             min_value=0.1,
             max_value=15.0,
             value=defaults["wal_years"],
@@ -274,7 +274,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
         col1, col2 = st.columns(2)
         with col1:
             deposit_beta_up = st.number_input(
-                f"{segment} â€' Deposit Beta (rising rates)",
+                f"{segment} ' Deposit Beta (rising rates)",
                 min_value=0.0,
                 max_value=1.5,
                 value=defaults["deposit_beta_up"],
@@ -282,7 +282,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 key=f"deposit_beta_up_{segment}",
             )
             repricing_beta_up = st.number_input(
-                f"{segment} â€' Repricing Beta (rising rates)",
+                f"{segment} ' Repricing Beta (rising rates)",
                 min_value=0.0,
                 max_value=2.0,
                 value=defaults["repricing_beta_up"],
@@ -291,7 +291,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
             )
         with col2:
             deposit_beta_down = st.number_input(
-                f"{segment} â€' Deposit Beta (falling rates)",
+                f"{segment} ' Deposit Beta (falling rates)",
                 min_value=0.0,
                 max_value=1.5,
                 value=defaults["deposit_beta_down"],
@@ -299,7 +299,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 key=f"deposit_beta_down_{segment}",
             )
             repricing_beta_down = st.number_input(
-                f"{segment} â€' Repricing Beta (falling rates)",
+                f"{segment} ' Repricing Beta (falling rates)",
                 min_value=0.0,
                 max_value=2.0,
                 value=defaults["repricing_beta_down"],
@@ -526,7 +526,7 @@ def main() -> None:
     """Streamlit application entry point."""
     st.set_page_config(
         page_title="ALM Validation - Deposit Accounts: DCF Calculation Engine",
-        page_icon="📊",
+        page_icon="",
         layout="wide",
     )
 
@@ -716,7 +716,7 @@ def main() -> None:
     st.markdown(
         """
         <div class="hero-card">
-            <h1>ALM Validation â€' Deposit Accounts: DCF Calculation Engine</h1>
+            <h1>ALM Validation ' Deposit Accounts: DCF Calculation Engine</h1>
             <div class="accent-line"></div>
             <p>
                 This interactive engine empowers ALM teams to validate non-maturity deposit assumptions,
@@ -740,7 +740,7 @@ def main() -> None:
                 </div>
                 <div class="flow-step">
                     <span>4</span>
-                    Run parallel shocks from Â±100 bps to Â±400 bps or launch Monte Carlo simulations with
+                    Run parallel shocks from 100 bps to 400 bps or launch Monte Carlo simulations with
                     user-defined volatility and drift.
                 </div>
                 <div class="flow-step">
@@ -788,7 +788,7 @@ def main() -> None:
         st.info("Awaiting CSV upload to begin.")
         return
 
-    st.markdown("### Step 1 â€' Preview Data & Map Fields")
+    st.markdown("### Step 1 ' Preview Data & Map Fields")
     st.dataframe(df_raw.head(10))
     columns = list(df_raw.columns)
     defaults = _infer_defaults(columns)
@@ -850,12 +850,12 @@ def main() -> None:
 
     mapped_df: pd.DataFrame = st.session_state["mapped_df"]
 
-    st.markdown("### Step 2 â€' Configure Segmentation & Assumptions")
+    st.markdown("### Step 2 ' Configure Segmentation & Assumptions")
     segmentation_friendly = {
         "All accounts as one segment": "all",
         "Segment by account type": "by_account_type",
         "Segment by customer segment": "by_customer_segment",
-        "Cross segmentation (account Ã— customer)": "cross",
+        "Cross segmentation (account  customer)": "cross",
     }
     segmentation_choice = st.selectbox(
         "Segmentation method",
@@ -883,7 +883,7 @@ def main() -> None:
 
     assumptions = _prepare_assumption_inputs(segments)
 
-    st.markdown("### Step 3 â€' Projection Settings")
+    st.markdown("### Step 3 ' Projection Settings")
     projection_months = st.number_input(
         "Projection horizon (months)",
         min_value=12,
@@ -1035,7 +1035,7 @@ def main() -> None:
     else:
         base_market_path = [0.03] * int(projection_months)
         st.caption(
-            "No yield curve selected yet — using a flat 3% base market path until a curve is configured."
+            "No yield curve selected yet  using a flat 3% base market path until a curve is configured."
         )
     st.session_state["base_market_path"] = base_market_path
 
@@ -1153,7 +1153,7 @@ def main() -> None:
     scenario_method = scenario_result.metadata.get("method", "")
 
     if scenario_method == "monte_carlo":
-        st.markdown(f"### Expected Cash Flow Detail â€' {selected_scenario}")
+        st.markdown(f"### Expected Cash Flow Detail ' {selected_scenario}")
         st.dataframe(scenario_result.cashflows)
         _download_button(
             f"Download expected cashflows ({selected_scenario})",
@@ -1219,7 +1219,7 @@ def main() -> None:
             .reset_index()
         )
 
-        st.markdown(f"### Cash Flow Detail â€' {selected_scenario}")
+        st.markdown(f"### Cash Flow Detail ' {selected_scenario}")
         st.dataframe(monthly_summary)
         sampled_cashflows = ReportGenerator.sample_cashflows(
             cashflows, sample_size=CASHFLOW_SAMPLE_SIZE
