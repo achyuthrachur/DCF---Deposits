@@ -142,22 +142,24 @@ def _decimalize(value: float) -> float:
 
 
 @st.cache_data(show_spinner=False)
-def _load_logo_data_uri() -> Optional[str]:
-    """Return the Crowe brand mark as a base64 data URI for embedding."""
+def _brand_logo_html() -> Optional[str]:
+    """Return the Crowe SVG markup wrapped for top-right display.
+
+    Prefers reading the repo asset; falls back to embedded SVG constant.
+    """
     search_paths = [
-        REPO_ROOT / "assets" / "crowe_logo.svg",
         PROJECT_ROOT / "assets" / "crowe_logo.svg",
+        REPO_ROOT / "assets" / "crowe_logo.svg",
     ]
-    logo_path = next((path for path in search_paths if path.exists()), None)
-    try:
-        if logo_path is not None:
-            encoded = b64encode(logo_path.read_bytes()).decode("utf-8")
-            return f"data:image/svg+xml;base64,{encoded}"
-        if CROWE_LOGO_SVG:
-            encoded = b64encode(CROWE_LOGO_SVG.encode("utf-8")).decode("utf-8")
-            return f"data:image/svg+xml;base64,{encoded}"
-    except Exception:
-        pass
+    for path in search_paths:
+        try:
+            if path.exists():
+                svg = path.read_text(encoding="utf-8")
+                return f"<div class='brand-badge'>{svg}</div>"
+        except Exception:
+            continue
+    if CROWE_LOGO_SVG:
+        return f"<div class='brand-badge'>{CROWE_LOGO_SVG}</div>"
     return None
 
 
@@ -581,12 +583,9 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    logo_data_uri = _load_logo_data_uri()
-    if logo_data_uri:
-        st.markdown(
-            f"<div class='brand-badge'><img src='{logo_data_uri}' alt='Crowe logo'></div>",
-            unsafe_allow_html=True,
-        )
+    brand_html = _brand_logo_html()
+    if brand_html:
+        st.markdown(brand_html, unsafe_allow_html=True)
 
     st.markdown(
         """
