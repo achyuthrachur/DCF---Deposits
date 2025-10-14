@@ -716,7 +716,7 @@ def main() -> None:
     st.markdown(
         """
         <div class="hero-card">
-            <h1>ALM Validation ' Deposit Accounts: DCF Calculation Engine</h1>
+            <h1>ALM Validation - Deposit Accounts: DCF Calculation Engine</h1>
             <div class="accent-line"></div>
             <p>
                 This interactive engine empowers ALM teams to validate non-maturity deposit assumptions,
@@ -788,7 +788,7 @@ def main() -> None:
         st.info("Awaiting CSV upload to begin.")
         return
 
-    st.markdown("### Step 1 ' Preview Data & Map Fields")
+    st.markdown("### Step 1 - Preview Data & Map Fields")
     st.dataframe(df_raw.head(10))
     columns = list(df_raw.columns)
     defaults = _infer_defaults(columns)
@@ -850,7 +850,7 @@ def main() -> None:
 
     mapped_df: pd.DataFrame = st.session_state["mapped_df"]
 
-    st.markdown("### Step 2 ' Configure Segmentation & Assumptions")
+    st.markdown("### Step 2 - Configure Segmentation & Assumptions")
     segmentation_friendly = {
         "All accounts as one segment": "all",
         "Segment by account type": "by_account_type",
@@ -883,7 +883,7 @@ def main() -> None:
 
     assumptions = _prepare_assumption_inputs(segments)
 
-    st.markdown("### Step 3 ' Projection Settings")
+    st.markdown("### Step 3 - Projection Settings")
     projection_months = st.number_input(
         "Projection horizon (months)",
         min_value=12,
