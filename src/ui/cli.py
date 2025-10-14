@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.engine import ALMEngine
+from src.core.discount import DiscountCurve
 from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
 from src.reporting import ReportGenerator
 
@@ -191,10 +192,31 @@ def _collect_segments(df: pd.DataFrame, segmentation: str) -> List[str]:
 
 
 
-def _prompt_monte_carlo_config(projection_months: int) -> Optional[MonteCarloConfig]:
+def _prompt_monte_carlo_config(
+    projection_months: int,
+    base_curve: Optional["DiscountCurve"],
+) -> Optional[MonteCarloConfig]:
     """Collect Monte Carlo configuration settings from the user."""
     if not typer.confirm("Run Monte Carlo simulation?", default=False):
         return None
+
+    console.print(
+        "\n[bold]Monte Carlo Overview[/bold]\n"
+        "• [green]Level 1 – Static curve[/green]: keeps today’s discount curve fixed and only simulates the short-rate path used for deposit repricing.\n"
+        "• [green]Level 2 – Two-factor curve[/green]: simulates correlated 3M and 10Y anchors, rebuilds the curve each month, and discounts using that evolved curve."
+    )
+
+    short_anchor = float(base_curve.get_rate(3)) if base_curve else 0.03
+    long_anchor = float(base_curve.get_rate(120)) if base_curve else short_anchor
+    console.print(
+        f"\nBase curve anchors from Treasury data:\n"
+        f"  • 3M anchor: {short_anchor * 100:.2f}%\n"
+        f"  • 10Y anchor: {long_anchor * 100:.2f}%"
+    )
+    console.print(
+        "Mean reversion (a) controls how quickly simulated rates revert toward the anchor.\n"
+        "Long-term mean (b) sets that anchor level. Volatility (sigma) drives monthly randomness."
+    )
 
     level_input = typer.prompt(
         "Implementation level (1 = Static curve, 2 = Two-factor)",
@@ -237,13 +259,13 @@ def _prompt_monte_carlo_config(projection_months: int) -> Optional[MonteCarloCon
             volatility=volatility,
         )
 
-    short_defaults = VasicekParams(mean_reversion=0.15, long_term_mean=0.03, volatility=0.01)
+    short_defaults = VasicekParams(mean_reversion=0.15, long_term_mean=short_anchor, volatility=0.01)
     short_params = _prompt_vasicek("Short rate", short_defaults)
 
     long_params = None
     correlation = 0.70
     if level == MonteCarloLevel.TWO_FACTOR:
-        long_defaults = VasicekParams(mean_reversion=0.05, long_term_mean=0.035, volatility=0.008)
+        long_defaults = VasicekParams(mean_reversion=0.07, long_term_mean=long_anchor, volatility=0.008)
         long_params = _prompt_vasicek("Long rate", long_defaults)
         correlation = float(typer.prompt("Correlation between short and long rates (rho)", default="0.70"))
         correlation = max(min(correlation, 0.99), -0.99)
@@ -276,6 +298,7 @@ def _prompt_monte_carlo_config(projection_months: int) -> Optional[MonteCarloCon
 
 def _prompt_scenario_selection(
     projection_months: int,
+    base_curve: Optional["DiscountCurve"],
 ) -> tuple[Dict[str, bool], Optional[MonteCarloConfig]]:
     """Ask user which standard scenarios to run."""
     console.print("\n[bold]Scenario Selection[/bold]")
@@ -294,7 +317,7 @@ def _prompt_scenario_selection(
         "short_shock_up": typer.confirm("Short-rate shock up (+200 bps front-end)?", default=False),
     }
 
-    mc_config = _prompt_monte_carlo_config(projection_months)
+    mc_config = _prompt_monte_carlo_config(projection_months, base_curve)
     if mc_config is not None:
         scenarios["monte_carlo"] = True
 
@@ -383,12 +406,15 @@ def run(
         (120, "10 Year"),
     ]
 
+    target_date: Optional[str] = None
     if discount_choice == "1":
         rate = _as_decimal(typer.prompt("Discount rate (annual decimal)", default="0.035"))
         engine.set_discount_single_rate(rate)
         console.print(f"Using flat discount rate of {rate * 100:.2f}%")
     elif discount_choice == "2":
         default_api_key = os.environ.get("FRED_API_KEY")
+        if default_api_key:
+            console.print("Using FRED_API_KEY from environment (press Enter to accept).")
         placeholder = "[env]" if default_api_key else ""
         user_value = typer.prompt(
             "Enter FRED API key (set FRED_API_KEY env var to avoid typing each run)",
@@ -397,15 +423,20 @@ def run(
         api_key = default_api_key if (user_value in ("", "[env]") and default_api_key) else user_value
         if not api_key:
             raise typer.BadParameter("FRED API key is required to fetch the curve.")
+        if default_api_key and api_key == default_api_key:
+            console.print("[green]Using key from FRED_API_KEY environment variable.[/green]")
         interpolation_method = (
             typer.prompt("Interpolation method (linear/log-linear/cubic)", default="linear")
             .strip()
             .lower()
             or "linear"
         )
+        if typer.confirm("Fetch curve for a specific valuation date?", default=False):
+            target_date = typer.prompt("Enter valuation date (YYYY-MM-DD)", default="").strip() or None
         curve = engine.set_discount_curve_from_fred(
             api_key,
             interpolation_method=interpolation_method,
+            target_date=target_date,
         )
         as_of = curve.metadata.get("as_of", "latest")
         console.print(f"[green]FRED curve loaded (as of {as_of}).[/green]")
@@ -441,13 +472,20 @@ def run(
     else:
         raise typer.BadParameter("Invalid discount configuration selection. Choose 1, 2, or 3.")
 
-    console.print("\n[bold]Base Market Rate[/bold]")
-    base_rate = _as_decimal(
-        typer.prompt("Enter base market rate (annual decimal)", default="0.03")
+    discount_curve = engine.discount_curve()
+    base_path = [
+        float(discount_curve.get_rate(month))
+        for month in range(1, projection_months + 1)
+    ]
+    engine.set_base_market_rate_path(base_path)
+    console.print(
+        f"\nBase market rate path derived from the yield curve (month 1: {base_path[0] * 100:.2f}%)."
     )
-    engine.set_base_market_rate_path(base_rate)
 
-    scenario_flags, monte_carlo_config = _prompt_scenario_selection(projection_months)
+    scenario_flags, monte_carlo_config = _prompt_scenario_selection(
+        projection_months,
+        discount_curve,
+    )
     if monte_carlo_config:
         engine.set_monte_carlo_config(monte_carlo_config)
     engine.configure_standard_scenarios(scenario_flags)

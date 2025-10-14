@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
@@ -197,10 +198,14 @@ class ALMEngine:
         api_key: str,
         *,
         interpolation_method: str = "linear",
+        target_date: Optional[Union[str, "datetime"]] = None,
     ) -> YieldCurve:
         """Fetch the latest Treasury curve from FRED and register it."""
         loader = FREDYieldCurveLoader(api_key)
-        curve = loader.get_current_yield_curve(interpolation_method=interpolation_method)
+        curve = loader.get_current_yield_curve(
+            interpolation_method=interpolation_method,
+            target_date=target_date,
+        )
         self.set_discount_curve(curve, source="fred")
         return curve
 

@@ -39,9 +39,9 @@ The web app renders results in-browser and provides download buttons for summary
 cashflow, and account-level PV CSVs.
 
 ### Yield Curve Sources
-- **Single rate** – retains backwards compatibility for quick what-if analysis.
-- **FRED API** – supply a FRED API key (`FRED_API_KEY` environment variable or UI input) to pull the latest Treasury curve. Snapshots are saved to `output/discount_curve.json`.
-- **Manual curve** – enter tenor points (3M–10Y) directly in the CLI or web app.
+- **Single rate** - retains backwards compatibility for quick what-if analysis.
+- **FRED API** - supply a FRED API key (`FRED_API_KEY` environment variable or UI input) to pull the latest Treasury curve. Snapshots are saved to `output/discount_curve.json`.
+- **Manual curve** - enter tenor points (3M-10Y) directly in the CLI or web app.
 
 ### Supported Scenarios
 - Deterministic parallel shocks: rising and falling rate moves from +/-100 bps through +/-400 bps.

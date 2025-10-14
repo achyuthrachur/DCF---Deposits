@@ -46,17 +46,28 @@ class FREDYieldCurveLoader:
         interpolation_method: str = "linear",
         min_points: int = 4,
         series_override: Optional[Dict[int, str]] = None,
-        lookback_days: int = 10,
+        lookback_days: int = 90,
+        target_date: Optional[datetime | str] = None,
     ) -> YieldCurve:
-        """Fetch the latest available yield curve data."""
+        """Fetch the latest (or specified date) yield curve data."""
+        if target_date is not None:
+            return self.get_historical_curve(
+                target_date,
+                interpolation_method=interpolation_method,
+            )
+
         tenors: list[int] = []
         rates: list[float] = []
         fetch_date: Optional[pd.Timestamp] = None
         mapping = series_override or self.SERIES_MAP
+        observation_start = datetime.utcnow() - timedelta(days=lookback_days)
 
         for tenor_months, series_id in sorted(mapping.items()):
             try:
-                data = self.fred.get_series(series_id, limit=lookback_days)
+                data = self.fred.get_series(
+                    series_id,
+                    observation_start=observation_start,
+                )
             except Exception as exc:  # pragma: no cover - network failure
                 LOGGER.warning("Failed to fetch series %s: %s", series_id, exc)
                 continue

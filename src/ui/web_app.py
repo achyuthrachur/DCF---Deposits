@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import os
+from datetime import date
 from base64 import b64encode
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -319,6 +320,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
 
 def _collect_scenarios(
     projection_months: int,
+    base_curve: Optional[YieldCurve],
 ) -> Tuple[Dict[str, bool], Optional[MonteCarloConfig]]:
     """Capture scenario selections from the user."""
     st.markdown("#### Scenario Selection")
@@ -331,14 +333,23 @@ def _collect_scenarios(
                 label, value=default, key=f"scenario_{scenario_id}"
             )
 
+    short_anchor = float(base_curve.get_rate(3)) if base_curve else 0.03
+    long_anchor = float(base_curve.get_rate(120)) if base_curve else short_anchor
+    default_interp = st.session_state.get("discount_interpolation_method", "linear")
+
     monte_carlo_config: Optional[MonteCarloConfig] = None
     with st.expander("Monte Carlo simulation", expanded=False):
         enable_mc = st.checkbox("Run Monte Carlo simulation", value=False, key="scenario_monte_carlo")
         st.caption(
-            "Monte Carlo draws generate stochastic rate paths used for deposit repricing and discounting."
+            "Level 1 keeps today's discount curve fixed and only simulates the 3M rate used for deposit repricing. "
+            "Level 2 evolves both the 3M and 10Y anchors so the entire curve can steepen or flatten over time."
         )
         if enable_mc:
             scenario_flags["monte_carlo"] = True
+            st.caption(
+                f"Current curve anchors: 3M = {short_anchor * 100:.2f}%, 10Y = {long_anchor * 100:.2f}%."
+            )
+
             level_choice = st.radio(
                 "Implementation level",
                 options=[
@@ -355,7 +366,7 @@ def _collect_scenarios(
             )
 
             num_sim = st.number_input(
-                "Simulations",
+                "Number of simulations",
                 min_value=100,
                 max_value=10000,
                 value=1000,
@@ -368,7 +379,7 @@ def _collect_scenarios(
             short_col = st.columns(3)
             with short_col[0]:
                 short_a = st.number_input(
-                    "Short mean reversion (a)",
+                    "Short mean reversion speed (a)",
                     min_value=0.0,
                     max_value=1.0,
                     value=0.15,
@@ -377,10 +388,10 @@ def _collect_scenarios(
                 )
             with short_col[1]:
                 short_b = st.number_input(
-                    "Short long-term mean (b)",
+                    "Short long-run anchor b (3M target)",
                     min_value=0.0,
                     max_value=0.20,
-                    value=0.03,
+                    value=float(short_anchor),
                     step=0.001,
                     format="%.3f",
                     key="mc_short_b",
@@ -407,19 +418,19 @@ def _collect_scenarios(
                 long_col = st.columns(3)
                 with long_col[0]:
                     long_a = st.number_input(
-                        "Long mean reversion (a)",
+                        "Long mean reversion speed (a)",
                         min_value=0.0,
                         max_value=1.0,
-                        value=0.05,
+                        value=0.07,
                         step=0.01,
                         key="mc_long_a",
                     )
                 with long_col[1]:
                     long_b = st.number_input(
-                        "Long long-term mean (b)",
+                        "Long long-run anchor b (10Y target)",
                         min_value=0.0,
                         max_value=0.20,
-                        value=0.035,
+                        value=float(long_anchor),
                         step=0.001,
                         format="%.3f",
                         key="mc_long_b",
@@ -440,7 +451,7 @@ def _collect_scenarios(
                     volatility=float(long_sigma),
                 )
                 correlation = st.slider(
-                    "Correlation between short and long rates",
+                    "Correlation between 3M and 10Y shocks",
                     min_value=-0.95,
                     max_value=0.95,
                     value=0.70,
@@ -465,10 +476,12 @@ def _collect_scenarios(
             generate_reports = st.checkbox(
                 "Generate detailed Monte Carlo reports", value=True, key="mc_reports"
             )
+            interp_options = ["linear", "log-linear", "cubic"]
+            interp_index = interp_options.index(default_interp) if default_interp in interp_options else 0
             interpolation_method = st.selectbox(
-                "Yield curve interpolation",
-                options=["linear", "log-linear", "cubic"],
-                index=0,
+                "Yield curve interpolation (for discounting)",
+                options=interp_options,
+                index=interp_index,
                 key="mc_interp",
             )
 
@@ -513,7 +526,7 @@ def main() -> None:
     """Streamlit application entry point."""
     st.set_page_config(
         page_title="ALM Validation - Deposit Accounts: DCF Calculation Engine",
-        page_icon="ðŸ“Š",
+        page_icon="📊",
         layout="wide",
     )
 
@@ -887,6 +900,8 @@ def main() -> None:
     )
 
     discount_config: Dict[str, object]
+    selected_curve: Optional[YieldCurve] = st.session_state.get("selected_discount_curve")
+    selected_interpolation = st.session_state.get("discount_interpolation_method", "linear")
     if discount_method == "Single rate":
         discount_rate_input = st.number_input(
             "Discount rate (annual decimal, e.g., 0.035 for 3.5%)",
@@ -895,7 +910,11 @@ def main() -> None:
             value=0.035,
             step=0.005,
         )
-        discount_config = {"mode": "single", "rate": discount_rate_input}
+        discount_config = {"mode": "single", "rate": discount_rate_input, "interpolation": "linear"}
+        flat_tenors = [3, 6, 12, 24, 36, 60, 84, 120]
+        flat_rates = [float(discount_rate_input)] * len(flat_tenors)
+        selected_curve = YieldCurve(flat_tenors, flat_rates, metadata={"source": "single_rate"})
+        selected_interpolation = "linear"
     elif discount_method == "Fetch from FRED":
         fred_api_key_default = os.environ.get("FRED_API_KEY", "")
         fred_api_key = st.text_input(
@@ -905,12 +924,33 @@ def main() -> None:
             help="Store a FRED API key in the FRED_API_KEY environment variable for convenience.",
             key="fred_api_key_input",
         )
+        use_specific_date = st.checkbox(
+            "Use specific valuation date",
+            value=bool(st.session_state.get("fred_target_date")),
+            key="fred_use_specific_date",
+        )
+        target_date_iso: Optional[str] = st.session_state.get("fred_target_date")
+        if use_specific_date:
+            default_date = (
+                date.fromisoformat(target_date_iso) if target_date_iso else date.today()
+            )
+            target_date_input = st.date_input(
+                "Valuation date",
+                value=default_date,
+                key="fred_target_date_input",
+            )
+            target_date_iso = target_date_input.isoformat()
+        else:
+            target_date_iso = None
+        st.session_state["fred_target_date"] = target_date_iso
+
         interpolation_method = st.selectbox(
             "Interpolation method",
             options=["linear", "log-linear", "cubic"],
             index=0,
             key="fred_interpolation",
         )
+        selected_interpolation = interpolation_method
         if st.button("Fetch current curve", use_container_width=True):
             if not fred_api_key:
                 st.error("FRED API key is required to fetch the Treasury curve.")
@@ -919,9 +959,11 @@ def main() -> None:
                     try:
                         loader = FREDYieldCurveLoader(fred_api_key)
                         curve_snapshot = loader.get_current_yield_curve(
-                            interpolation_method=interpolation_method
+                            interpolation_method=interpolation_method,
+                            target_date=target_date_iso,
                         )
                         st.session_state["fred_curve_snapshot"] = curve_snapshot
+                        st.session_state["selected_discount_curve"] = curve_snapshot
                         st.success(
                             f"Curve loaded (as of {curve_snapshot.metadata.get('as_of', 'latest')})."
                         )
@@ -937,6 +979,7 @@ def main() -> None:
                     for tenor, rate in zip(curve_snapshot.tenors, curve_snapshot.rates)
                 )
             )
+            selected_curve = curve_snapshot
         else:
             st.info("Click 'Fetch current curve' after entering your API key.")
 
@@ -944,6 +987,7 @@ def main() -> None:
             "mode": "fred",
             "api_key": fred_api_key,
             "interpolation": interpolation_method,
+            "target_date": target_date_iso,
         }
     else:
         st.write("Enter annualised rates for each tenor (leave blank to omit).")
@@ -972,16 +1016,33 @@ def main() -> None:
             "tenor_rates": tenor_values,
             "interpolation": interpolation_method,
         }
+        sorted_tenors = sorted(tenor_values.keys())
+        manual_rates = [tenor_values[t] for t in sorted_tenors]
+        selected_curve = YieldCurve(sorted_tenors, manual_rates, interpolation_method=interpolation_method, metadata={"source": "manual"})
+        selected_interpolation = interpolation_method
 
-    base_rate_input = st.number_input(
-        "Base market rate (annual decimal, e.g., 0.03 for 3%)",
-        min_value=0.0,
-        max_value=0.15,
-        value=0.03,
-        step=0.005,
+    st.session_state["selected_discount_curve"] = selected_curve
+    st.session_state["discount_interpolation_method"] = selected_interpolation
+
+    if selected_curve:
+        base_market_path = [
+            float(selected_curve.get_rate(month))
+            for month in range(1, int(projection_months) + 1)
+        ]
+        st.caption(
+            f"Base market rate path derived from the selected curve (month 1: {base_market_path[0] * 100:.2f}%)."
+        )
+    else:
+        base_market_path = [0.03] * int(projection_months)
+        st.caption(
+            "No yield curve selected yet — using a flat 3% base market path until a curve is configured."
+        )
+    st.session_state["base_market_path"] = base_market_path
+
+    scenario_flags, monte_carlo_config = _collect_scenarios(
+        int(projection_months),
+        selected_curve,
     )
-
-    scenario_flags, monte_carlo_config = _collect_scenarios(int(projection_months))
 
     run_clicked = st.button("Run Analysis", type="primary")
 
@@ -1018,12 +1079,14 @@ def main() -> None:
                     source="manual",
                 )
             elif mode == "fred":
-                fred_api_key = discount_config.get("api_key", "")
+                fred_api_key = discount_config.get("api_key") or os.environ.get("FRED_API_KEY", "")
                 interpolation = discount_config.get("interpolation", "linear")
+                target_date = discount_config.get("target_date")
                 if fred_api_key:
                     engine.set_discount_curve_from_fred(
                         fred_api_key,
                         interpolation_method=interpolation,
+                        target_date=target_date,
                     )
                 else:
                     curve_snapshot = st.session_state.get("fred_curve_snapshot")
@@ -1031,7 +1094,11 @@ def main() -> None:
                         st.error("Fetch a FRED curve or provide an API key before running analysis.")
                         return
                     engine.set_discount_curve(curve_snapshot, source="fred")
-            engine.set_base_market_rate_path(_decimalize(base_rate_input))
+            base_market_path = st.session_state.get(
+                "base_market_path",
+                [0.03] * int(projection_months),
+            )
+            engine.set_base_market_rate_path(base_market_path)
             if monte_carlo_config:
                 engine.set_monte_carlo_config(monte_carlo_config)
             engine.configure_standard_scenarios(scenario_flags)
