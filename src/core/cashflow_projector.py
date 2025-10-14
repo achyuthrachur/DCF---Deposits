@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 from typing import Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -79,20 +80,27 @@ class CashflowProjector:
         monthly_decay = assumptions.monthly_decay_rate()
         balance = account.balance
         base_deposit_rate = account.interest_rate
+        wal_months = max(1, int(ceil(assumptions.wal_years * 12)))
+        months_to_project = min(projection_months, wal_months)
 
         records: List[dict] = []
-        for month in range(1, projection_months + 1):
+        for month in range(1, months_to_project + 1):
             base_rate = base_rates[month - 1]
             shock = scenario.rate_adjustment(month)
-            scenario_rate = max(0.0, base_rate + shock)
+            repricing_beta = (
+                assumptions.repricing_beta_up if shock >= 0 else assumptions.repricing_beta_down
+            )
+            market_delta = shock * repricing_beta
+            scenario_rate = max(0.0, base_rate + market_delta)
             adjusted_rate = self._adjust_deposit_rate(
                 base_deposit_rate=base_deposit_rate,
-                base_market_rate=base_rate,
-                scenario_market_rate=scenario_rate,
-                beta_up=assumptions.beta_up,
-                beta_down=assumptions.beta_down,
+                market_delta=market_delta,
+                deposit_beta_up=assumptions.deposit_beta_up,
+                deposit_beta_down=assumptions.deposit_beta_down,
             )
             principal_runoff = balance * monthly_decay
+            if month == wal_months or principal_runoff >= balance:
+                principal_runoff = balance
             interest = balance * (adjusted_rate / 12)
             ending_balance = balance - principal_runoff
             records.append(
@@ -132,14 +140,12 @@ class CashflowProjector:
     def _adjust_deposit_rate(
         *,
         base_deposit_rate: float,
-        base_market_rate: float,
-        scenario_market_rate: float,
-        beta_up: float,
-        beta_down: float,
+        market_delta: float,
+        deposit_beta_up: float,
+        deposit_beta_down: float,
     ) -> float:
         """Apply deposit beta to the market rate change to derive deposit rate."""
-        market_delta = scenario_market_rate - base_market_rate
-        beta = beta_up if market_delta >= 0 else beta_down
+        beta = deposit_beta_up if market_delta >= 0 else deposit_beta_down
         adjusted = base_deposit_rate + market_delta * beta
         return max(0.0, adjusted)
 

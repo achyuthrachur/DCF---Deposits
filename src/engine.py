@@ -104,8 +104,10 @@ class ALMEngine:
         segment_key: str,
         decay_rate: float,
         wal_years: float,
-        beta_up: float,
-        beta_down: float,
+        deposit_beta_up: float,
+        deposit_beta_down: float,
+        repricing_beta_up: float,
+        repricing_beta_down: float,
         notes: Optional[str] = None,
     ) -> None:
         """Set the assumptions for a specific segment."""
@@ -113,8 +115,10 @@ class ALMEngine:
             segment_key=segment_key,
             decay_rate=decay_rate,
             wal_years=wal_years,
-            beta_up=beta_up,
-            beta_down=beta_down,
+            deposit_beta_up=deposit_beta_up,
+            deposit_beta_down=deposit_beta_down,
+            repricing_beta_up=repricing_beta_up,
+            repricing_beta_down=repricing_beta_down,
             notes=notes,
         )
         self._assumptions.add(assumption)

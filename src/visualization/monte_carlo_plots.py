@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
-import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.colors import sample_colorscale
 
 
 def extract_monte_carlo_data(
@@ -64,6 +66,43 @@ def _setup_figure(figsize=(10, 6)):
     plt.style.use("seaborn-v0_8")
     fig, ax = plt.subplots(figsize=figsize)
     return fig, ax
+
+
+def _format_currency_axis(ax, values: Iterable[float], axis: str = "x") -> None:
+    """Format currency axes with scalable, compact tick labels."""
+    finite_values = [
+        abs(float(v))
+        for v in values
+        if v is not None and not np.isnan(v) and not np.isinf(v)
+    ]
+    if not finite_values:
+        return
+
+    max_value = max(finite_values)
+    if max_value >= 1e9:
+        scale, suffix, decimals = 1e9, "B", 1
+    elif max_value >= 1e6:
+        scale, suffix, decimals = 1e6, "M", 1
+    elif max_value >= 1e5:
+        scale, suffix, decimals = 1e3, "K", 0
+    else:
+        scale, suffix, decimals = 1.0, "", 0
+
+    def _formatter(val: float, _pos: int) -> str:
+        scaled = val / scale
+        if decimals:
+            formatted = f"{scaled:,.{decimals}f}"
+        else:
+            formatted = f"{scaled:,.0f}"
+        return f"${formatted}{suffix}"
+
+    axis_obj = getattr(ax, f"{axis}axis")
+    axis_obj.set_major_formatter(FuncFormatter(_formatter))
+    axis_obj.set_major_locator(MaxNLocator(6))
+    ax.tick_params(axis=axis, labelsize=10)
+    for spine in ("top", "right"):
+        if spine in ax.spines:
+            ax.spines[spine].set_visible(False)
 
 
 def plot_rate_path_spaghetti(
@@ -169,7 +208,7 @@ def plot_portfolio_pv_distribution(
     counts, bins, patches = ax.hist(values, bins=60, color="#4f81bd", alpha=0.75, edgecolor="black")
 
     # Highlight risk zones
-    if book_value:
+    if book_value is not None:
         for patch, left in zip(patches, bins[:-1]):
             if left + patch.get_width() < book_value * 0.95:
                 patch.set_facecolor("#c0504d")
@@ -180,9 +219,9 @@ def plot_portfolio_pv_distribution(
         ax.axvline(x_val, color=color, linestyle="--", linewidth=2)
         ax.text(x_val, ax.get_ylim()[1] * 0.9, label, rotation=90, color=color, ha="right", va="top")
 
-    if book_value:
+    if book_value is not None:
         _annotate_line(book_value, "Book Value", "black")
-    if base_case_pv:
+    if base_case_pv is not None:
         _annotate_line(base_case_pv, "Base Case PV", "orange")
     if percentiles:
         for key, color in [("p5", "red"), ("p50", "navy"), ("p95", "green")]:
@@ -197,8 +236,17 @@ def plot_portfolio_pv_distribution(
     ax.set_xlabel("Portfolio PV ($)")
     ax.set_ylabel("Frequency")
     ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.grid(True, alpha=0.3, axis="y")
-    ax.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
+    ax.grid(True, alpha=0.25, axis="y", linestyle="--")
+
+    reference_values = list(values)
+    if book_value is not None:
+        reference_values.append(book_value)
+    if base_case_pv is not None:
+        reference_values.append(base_case_pv)
+    if percentiles:
+        reference_values.extend(percentiles.values())
+    _format_currency_axis(ax, reference_values, axis="x")
+
     fig.tight_layout()
     return fig
 
@@ -232,21 +280,28 @@ def plot_percentile_ladder(
 
     fig, ax = _setup_figure(figsize=(8, 6))
     y_pos = np.arange(len(values))
-    ax.barh(y_pos, values, color="#4f81bd", alpha=0.7)
+    ax.barh(y_pos, values, color="#4f81bd", alpha=0.75)
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
 
-    if book_value:
+    if book_value is not None:
         ax.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book Value")
-    if base_case_pv:
+    if base_case_pv is not None:
         ax.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Base Case")
 
     ax.set_xlabel("Portfolio PV ($)")
     ax.set_title(title, fontsize=13, fontweight="bold")
-    if book_value or base_case_pv:
+    if (book_value is not None) or (base_case_pv is not None):
         ax.legend(loc="lower right")
-    ax.grid(True, alpha=0.3, axis="x")
-    ax.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
+    ax.grid(True, alpha=0.2, axis="x", linestyle="--")
+
+    reference_values = list(values)
+    if book_value is not None:
+        reference_values.append(book_value)
+    if base_case_pv is not None:
+        reference_values.append(base_case_pv)
+    _format_currency_axis(ax, reference_values, axis="x")
+
     fig.tight_layout()
     return fig
 
@@ -293,9 +348,9 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
     # Top-right: Risk gauge with explanation
     ax2 = fig.add_subplot(gs[0, 2])
     ax2.axis("off")
-    if book_value and percentiles:
+    if (book_value is not None) and percentiles:
         p5 = percentiles.get("p5")
-        if p5:
+        if p5 is not None:
             shortfall = book_value - p5
             shortfall_pct = max(0.0, shortfall / book_value * 100)
             color = "#4f9d69" if shortfall_pct <= 5 else "#f6c343" if shortfall_pct <= 15 else "#c94c4c"
@@ -308,9 +363,9 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
     ax3 = fig.add_subplot(gs[1, :2])
     values = pv_distribution["present_value"].to_numpy()
     ax3.hist(values, bins=60, color="#4f81bd", alpha=0.75, edgecolor="black")
-    if book_value:
+    if book_value is not None:
         ax3.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
-    if base_case_pv:
+    if base_case_pv is not None:
         ax3.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Deterministic base PV")
     if percentiles:
         for key, color, label in [
@@ -323,9 +378,20 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
     ax3.set_title("Distribution of portfolio PV", fontweight="bold")
     ax3.set_xlabel("Present value ($)")
     ax3.set_ylabel("Number of simulations")
-    ax3.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
-    ax3.legend(loc="best")
-    ax3.grid(True, alpha=0.25, axis="y")
+    reference_values = list(values)
+    show_legend = False
+    if book_value is not None:
+        reference_values.append(book_value)
+        show_legend = True
+    if base_case_pv is not None:
+        reference_values.append(base_case_pv)
+        show_legend = True
+    if percentiles:
+        show_legend = True
+    _format_currency_axis(ax3, reference_values, axis="x")
+    if show_legend:
+        ax3.legend(loc="best")
+    ax3.grid(True, alpha=0.25, axis="y", linestyle="--")
 
     # Middle-right: Percentile table with descriptions
     ax4 = fig.add_subplot(gs[1, 2])
@@ -372,16 +438,21 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         ax5.barh(y_pos, values, color="#4f81bd", alpha=0.75)
         ax5.set_yticks(y_pos)
         ax5.set_yticklabels(labels)
-        if book_value:
+        if book_value is not None:
             ax5.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
-        if base_case_pv:
+        if base_case_pv is not None:
             ax5.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Base case PV")
         ax5.set_xlabel("Present value ($)")
         ax5.set_title("Percentile ladder", fontweight="bold")
-        ax5.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
-        if book_value or base_case_pv:
+        reference_values = list(values)
+        if book_value is not None:
+            reference_values.append(book_value)
+        if base_case_pv is not None:
+            reference_values.append(base_case_pv)
+        _format_currency_axis(ax5, reference_values, axis="x")
+        if (book_value is not None) or (base_case_pv is not None):
             ax5.legend(loc="lower right")
-        ax5.grid(True, alpha=0.3, axis="x")
+        ax5.grid(True, alpha=0.2, axis="x", linestyle="--")
     else:
         ax5.axis("off")
 
@@ -421,13 +492,13 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         median = percentiles.get("p50")
         p5 = percentiles.get("p5")
         p95 = percentiles.get("p95")
-        if book_value and median:
+        if (book_value is not None) and (median is not None):
             delta = median - book_value
             direction = "higher" if delta >= 0 else "lower"
             narrative_lines.append(
                 f"Median PV: ${median:,.0f} ({abs(delta):,.0f} {direction} than book value)"
             )
-        if p5 and p95:
+        if (p5 is not None) and (p95 is not None):
             narrative_lines.append(
                 f"Central 90% range: ${p5:,.0f} to ${p95:,.0f}"
             )
@@ -462,8 +533,41 @@ def create_rate_path_animation(
     base_path = rate_summary["base_rate"].to_numpy() * 100
     p5 = rate_summary["p05"].to_numpy() * 100
     p95 = rate_summary["p95"].to_numpy() * 100
+    sample_paths = np.empty((0, len(months)))
+    sample_labels = np.array([])
+    sample_colors: list[str] = []
+    if rate_sample is not None and not rate_sample.empty:
+        path_matrix = rate_sample.drop(columns="simulation").to_numpy(dtype=float) * 100
+        sample_labels = rate_sample["simulation"].to_numpy()
+        max_paths = min(path_matrix.shape[0], 150)
+        path_matrix = path_matrix[:max_paths]
+        sample_labels = sample_labels[:max_paths]
+        order = np.argsort(path_matrix[:, -1])
+        sample_paths = path_matrix[order]
+        sample_labels = sample_labels[order]
+        if len(sample_paths):
+            color_positions = np.linspace(0.25, 0.85, len(sample_paths)).tolist()
+            sample_colors = sample_colorscale("Blues", color_positions)
 
     fig = go.Figure()
+
+    for idx, path in enumerate(sample_paths):
+        initial_series = np.concatenate(
+            [path[:1], np.full(len(months) - 1, np.nan)]
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=months,
+                y=initial_series,
+                mode="lines",
+                line=dict(color=sample_colors[idx], width=1.3),
+                opacity=0.7,
+                legendgroup="sim_paths",
+                name="Simulation paths" if idx == 0 else f"Simulation {int(sample_labels[idx])}",
+                showlegend=idx == 0,
+                hovertemplate="Month %{x}<br>Rate %{y:.2f}%<extra></extra>",
+            )
+        )
 
     fig.add_trace(
         go.Scatter(
@@ -472,6 +576,7 @@ def create_rate_path_animation(
             mode="lines",
             name="Mean path",
             line=dict(color="#003f5c", width=3),
+            hovertemplate="Month %{x}<br>Rate %{y:.2f}%<extra></extra>",
         )
     )
     fig.add_trace(
@@ -481,6 +586,7 @@ def create_rate_path_animation(
             mode="lines",
             name="Base case",
             line=dict(color="#ffa600", width=2, dash="dash"),
+            hovertemplate="Month %{x}<br>Rate %{y:.2f}%<extra></extra>",
         )
     )
     fig.add_trace(
@@ -488,42 +594,97 @@ def create_rate_path_animation(
             x=np.concatenate([months[:1], months[:1][::-1]]),
             y=np.concatenate([p95[:1], p5[:1][::-1]]),
             fill="toself",
-            fillcolor="rgba(244,204,204,0.4)",
+            fillcolor="rgba(244,204,204,0.35)",
+            legendgroup="band",
+            showlegend=True,
+            name="5th-95th band",
             line=dict(color="rgba(244,204,204,0.0)"),
             hoverinfo="skip",
-            name="5th-95th band",
         )
     )
 
-    frames = []
+    frames: list[go.Frame] = []
     for i in range(1, len(months)):
-        frame_data = [
-            go.Scatter(x=months[: i + 1], y=mean_path[: i + 1], mode="lines", line=dict(color="#003f5c", width=3)),
-            go.Scatter(x=months[: i + 1], y=base_path[: i + 1], mode="lines", line=dict(color="#ffa600", width=2, dash="dash")),
+        frame_traces: list[go.Scatter] = []
+        if sample_paths.size:
+            for idx, path in enumerate(sample_paths):
+                path_values = np.concatenate(
+                    [path[: i + 1], np.full(len(months) - i - 1, np.nan)]
+                )
+                frame_traces.append(
+                    go.Scatter(
+                        x=months,
+                        y=path_values,
+                        mode="lines",
+                        line=dict(color=sample_colors[idx], width=1.3),
+                        opacity=0.7,
+                        legendgroup="sim_paths",
+                        hovertemplate="Month %{x}<br>Rate %{y:.2f}%<extra></extra>",
+                        showlegend=False,
+                    )
+                )
+        frame_traces.append(
+            go.Scatter(
+                x=months[: i + 1],
+                y=mean_path[: i + 1],
+                mode="lines",
+                line=dict(color="#003f5c", width=3),
+            )
+        )
+        frame_traces.append(
+            go.Scatter(
+                x=months[: i + 1],
+                y=base_path[: i + 1],
+                mode="lines",
+                line=dict(color="#ffa600", width=2, dash="dash"),
+            )
+        )
+        frame_traces.append(
             go.Scatter(
                 x=np.concatenate([months[: i + 1], months[: i + 1][::-1]]),
                 y=np.concatenate([p95[: i + 1], p5[: i + 1][::-1]]),
                 fill="toself",
-                fillcolor="rgba(244,204,204,0.4)",
+                fillcolor="rgba(244,204,204,0.35)",
                 line=dict(color="rgba(244,204,204,0.0)"),
                 hoverinfo="skip",
-            ),
-        ]
-        frames.append(go.Frame(data=frame_data, name=str(months[i])))
+            )
+        )
+        frames.append(go.Frame(data=frame_traces, name=str(months[i])))
 
     fig.frames = frames
     fig.update_layout(
         title="Evolution of interest rate paths",
-        xaxis_title="Month",
-        yaxis_title="Interest rate (%)",
+        xaxis=dict(
+            title="Month",
+            dtick=12,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.1)",
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title="Interest rate (%)",
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.1)",
+            zeroline=False,
+        ),
         template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        hovermode="x unified",
         updatemenus=[
             dict(
                 type="buttons",
                 showactive=False,
                 buttons=[
-                    dict(label="Play", method="animate", args=[None, {"frame": {"duration": 120, "redraw": True}, "fromcurrent": True}]),
-                    dict(label="Pause", method="animate", args=[[None], {"frame": {"duration": 0}, "mode": "immediate", "transition": {"duration": 0}}]),
+                    dict(
+                        label="Play",
+                        method="animate",
+                        args=[None, {"frame": {"duration": 120, "redraw": True}, "fromcurrent": True}],
+                    ),
+                    dict(
+                        label="Pause",
+                        method="animate",
+                        args=[[None], {"frame": {"duration": 0}, "mode": "immediate", "transition": {"duration": 0}}],
+                    ),
                 ],
             )
         ],
@@ -538,6 +699,7 @@ def create_rate_path_animation(
                 len=0.9,
             )
         ],
+        margin=dict(l=60, r=20, t=60, b=50),
     )
 
     return fig

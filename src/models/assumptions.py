@@ -18,17 +18,29 @@ class SegmentAssumptions(BaseModel):
         le=15,
         description="Weighted average life in years",
     )
-    beta_up: float = Field(
+    deposit_beta_up: float = Field(
         ...,
         ge=0.0,
         le=1.5,
-        description="Deposit beta applied when rates rise",
+        description="Deposit beta applied when market rates rise",
     )
-    beta_down: float = Field(
+    deposit_beta_down: float = Field(
         ...,
         ge=0.0,
         le=1.5,
-        description="Repricing beta applied when rates fall",
+        description="Deposit beta applied when market rates fall",
+    )
+    repricing_beta_up: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+        description="Repricing beta applied to market shocks when rates rise",
+    )
+    repricing_beta_down: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+        description="Repricing beta applied to market shocks when rates fall",
     )
     notes: Optional[str] = Field(
         None, description="Optional commentary about the assumption set"
@@ -42,6 +54,22 @@ class SegmentAssumptions(BaseModel):
         if not value:
             raise ValueError("segment_key cannot be empty")
         return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, values: Dict[str, object]) -> Dict[str, object]:
+        """Support legacy beta fields by upgrading them to the new schema."""
+        if isinstance(values, dict):
+            beta_up = values.get("beta_up")
+            beta_down = values.get("beta_down")
+            if "deposit_beta_up" not in values and beta_up is not None:
+                values["deposit_beta_up"] = beta_up
+            if "deposit_beta_down" not in values and beta_down is not None:
+                values["deposit_beta_down"] = beta_down
+            # Default repricing betas to 1.0 (full pass-through) if not provided.
+            values.setdefault("repricing_beta_up", 1.0)
+            values.setdefault("repricing_beta_down", 1.0)
+        return values
 
     @model_validator(mode="after")
     def _cross_check(self) -> "SegmentAssumptions":

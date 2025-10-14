@@ -33,9 +33,30 @@ OPTIONAL_FIELDS = {
 }
 
 DEFAULT_ASSUMPTIONS = {
-    "checking": {"decay_rate": 0.05, "wal_years": 5.0, "beta_up": 0.40, "beta_down": 0.25},
-    "savings": {"decay_rate": 0.08, "wal_years": 3.5, "beta_up": 0.55, "beta_down": 0.35},
-    "money market": {"decay_rate": 0.20, "wal_years": 1.5, "beta_up": 0.75, "beta_down": 0.60},
+    "checking": {
+        "decay_rate": 0.05,
+        "wal_years": 5.0,
+        "deposit_beta_up": 0.40,
+        "deposit_beta_down": 0.25,
+        "repricing_beta_up": 1.00,
+        "repricing_beta_down": 1.00,
+    },
+    "savings": {
+        "decay_rate": 0.08,
+        "wal_years": 3.5,
+        "deposit_beta_up": 0.55,
+        "deposit_beta_down": 0.35,
+        "repricing_beta_up": 1.00,
+        "repricing_beta_down": 1.00,
+    },
+    "money market": {
+        "decay_rate": 0.20,
+        "wal_years": 1.5,
+        "deposit_beta_up": 0.75,
+        "deposit_beta_down": 0.60,
+        "repricing_beta_up": 1.00,
+        "repricing_beta_down": 1.00,
+    },
 }
 
 
@@ -94,7 +115,7 @@ def _as_decimal(value: str) -> float:
 
 
 def _prompt_assumptions(segment: str) -> Dict[str, float]:
-    """Prompt user for the four core assumption inputs."""
+    """Prompt user for the core assumption inputs."""
     key = segment.lower()
     suggestions = next(
         (values for pattern, values in DEFAULT_ASSUMPTIONS.items() if pattern in key),
@@ -113,23 +134,37 @@ def _prompt_assumptions(segment: str) -> Dict[str, float]:
             default=f"{suggestions['wal_years']:.2f}",
         )
     )
-    beta_up = _as_decimal(
+    deposit_beta_up = _as_decimal(
         typer.prompt(
             "Deposit Beta (rising rates)",
-            default=f"{suggestions['beta_up']:.2f}",
+            default=f"{suggestions['deposit_beta_up']:.2f}",
         )
     )
-    beta_down = _as_decimal(
+    deposit_beta_down = _as_decimal(
+        typer.prompt(
+            "Deposit Beta (falling rates)",
+            default=f"{suggestions['deposit_beta_down']:.2f}",
+        )
+    )
+    repricing_beta_up = _as_decimal(
+        typer.prompt(
+            "Repricing Beta (rising rates)",
+            default=f"{suggestions['repricing_beta_up']:.2f}",
+        )
+    )
+    repricing_beta_down = _as_decimal(
         typer.prompt(
             "Repricing Beta (falling rates)",
-            default=f"{suggestions['beta_down']:.2f}",
+            default=f"{suggestions['repricing_beta_down']:.2f}",
         )
     )
     return {
         "decay_rate": decay,
         "wal_years": wal,
-        "beta_up": beta_up,
-        "beta_down": beta_down,
+        "deposit_beta_up": deposit_beta_up,
+        "deposit_beta_down": deposit_beta_down,
+        "repricing_beta_up": repricing_beta_up,
+        "repricing_beta_down": repricing_beta_down,
     }
 
 

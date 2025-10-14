@@ -40,9 +40,30 @@ OPTIONAL_FIELDS = {
 }
 
 DEFAULT_ASSUMPTIONS = {
-    "checking": {"decay_rate": 0.05, "wal_years": 5.0, "beta_up": 0.40, "beta_down": 0.25},
-    "savings": {"decay_rate": 0.08, "wal_years": 3.5, "beta_up": 0.55, "beta_down": 0.35},
-    "money market": {"decay_rate": 0.20, "wal_years": 1.5, "beta_up": 0.75, "beta_down": 0.60},
+    "checking": {
+        "decay_rate": 0.05,
+        "wal_years": 5.0,
+        "deposit_beta_up": 0.40,
+        "deposit_beta_down": 0.25,
+        "repricing_beta_up": 1.00,
+        "repricing_beta_down": 1.00,
+    },
+    "savings": {
+        "decay_rate": 0.08,
+        "wal_years": 3.5,
+        "deposit_beta_up": 0.55,
+        "deposit_beta_down": 0.35,
+        "repricing_beta_up": 1.00,
+        "repricing_beta_down": 1.00,
+    },
+    "money market": {
+        "decay_rate": 0.20,
+        "wal_years": 1.5,
+        "deposit_beta_up": 0.75,
+        "deposit_beta_down": 0.60,
+        "repricing_beta_up": 1.00,
+        "repricing_beta_down": 1.00,
+    },
 }
 
 SCENARIO_OPTIONS = [
@@ -214,27 +235,48 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
             step=0.1,
             key=f"wal_{segment}",
         )
-        beta_up = st.number_input(
-            f"{segment} – Deposit Beta (rising rates)",
-            min_value=0.0,
-            max_value=1.5,
-            value=defaults["beta_up"],
-            step=0.05,
-            key=f"beta_up_{segment}",
-        )
-        beta_down = st.number_input(
-            f"{segment} – Repricing Beta (falling rates)",
-            min_value=0.0,
-            max_value=1.5,
-            value=defaults["beta_down"],
-            step=0.05,
-            key=f"beta_down_{segment}",
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            deposit_beta_up = st.number_input(
+                f"{segment} – Deposit Beta (rising rates)",
+                min_value=0.0,
+                max_value=1.5,
+                value=defaults["deposit_beta_up"],
+                step=0.05,
+                key=f"deposit_beta_up_{segment}",
+            )
+            repricing_beta_up = st.number_input(
+                f"{segment} – Repricing Beta (rising rates)",
+                min_value=0.0,
+                max_value=2.0,
+                value=defaults["repricing_beta_up"],
+                step=0.05,
+                key=f"repricing_beta_up_{segment}",
+            )
+        with col2:
+            deposit_beta_down = st.number_input(
+                f"{segment} – Deposit Beta (falling rates)",
+                min_value=0.0,
+                max_value=1.5,
+                value=defaults["deposit_beta_down"],
+                step=0.05,
+                key=f"deposit_beta_down_{segment}",
+            )
+            repricing_beta_down = st.number_input(
+                f"{segment} – Repricing Beta (falling rates)",
+                min_value=0.0,
+                max_value=2.0,
+                value=defaults["repricing_beta_down"],
+                step=0.05,
+                key=f"repricing_beta_down_{segment}",
+            )
         assumption_values[segment] = {
             "decay_rate": decay,
             "wal_years": wal,
-            "beta_up": beta_up,
-            "beta_down": beta_down,
+            "deposit_beta_up": deposit_beta_up,
+            "deposit_beta_down": deposit_beta_down,
+            "repricing_beta_up": repricing_beta_up,
+            "repricing_beta_down": repricing_beta_down,
         }
     return assumption_values
 
@@ -742,8 +784,10 @@ def main() -> None:
                     segment_key=segment_key,
                     decay_rate=_decimalize(values["decay_rate"]),
                     wal_years=values["wal_years"],
-                    beta_up=_decimalize(values["beta_up"]),
-                    beta_down=_decimalize(values["beta_down"]),
+                    deposit_beta_up=_decimalize(values["deposit_beta_up"]),
+                    deposit_beta_down=_decimalize(values["deposit_beta_down"]),
+                    repricing_beta_up=_decimalize(values["repricing_beta_up"]),
+                    repricing_beta_down=_decimalize(values["repricing_beta_down"]),
                 )
             if isinstance(discount_config, dict):
                 engine.set_discount_yield_curve(discount_config)
