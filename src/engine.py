@@ -506,10 +506,15 @@ class ALMEngine:
                         pass
 
             if progress_callback:
-                emit_progress(
-                    min(total_steps, sim_offset + total_accounts),
-                    f"Scenario {scenario_index}/{total_scenarios}: simulation {idx + 1}/{num_sim}",
-                )
+                safe_step = max(0, min(total_steps, sim_offset + total_accounts))
+                try:
+                    progress_callback(
+                        safe_step,
+                        total_steps,
+                        f"Scenario {scenario_index}/{total_scenarios}: simulation {idx + 1}/{num_sim}",
+                    )
+                except Exception:  # pragma: no cover
+                    pass
 
             pv_values[idx] = pv_calculator.portfolio_pv(cashflows)
             monthly_totals = (
