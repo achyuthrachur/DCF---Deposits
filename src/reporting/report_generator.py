@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 
 import json
 
@@ -19,6 +19,9 @@ from ..visualization import (
     plot_rate_path_spaghetti,
 )
 from ..visualization.monte_carlo_plots import save_figure
+
+if TYPE_CHECKING:
+    from ..engine import DiscountConfig
 
 
 class ReportGenerator:
@@ -114,6 +117,63 @@ class ReportGenerator:
         with path.open("w", encoding="utf-8") as fh:
             json.dump(results.validation_summary, fh, indent=2)
         return path
+
+    def export_discount_configuration(
+        self,
+        discount_config: "DiscountConfig",
+        filename: str = "discount_curve.json",
+    ) -> Path:
+        """Persist the active discount configuration to JSON."""
+        payload = {
+            "method": discount_config.method,
+            "source": discount_config.source,
+            "metadata": discount_config.metadata,
+            "curve": discount_config.curve.to_dict(),
+        }
+        path = self.output_dir / filename
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        return path
+
+    def export_monte_carlo_tables(
+        self,
+        results: EngineResults,
+        scenario_id: str = "monte_carlo",
+        prefix: str = "monte_carlo",
+    ) -> Dict[str, Path]:
+        """Export Monte Carlo distribution, summary, percentile, and config artifacts."""
+
+        scenario = results.scenario_results.get(scenario_id)
+        if scenario is None:
+            return {}
+
+        tables = scenario.extra_tables or {}
+        output_paths: Dict[str, Path] = {}
+
+        def _export_table(key: str, filename: str) -> None:
+            table = tables.get(key)
+            if table is None or table.empty:
+                return
+            path = self.output_dir / filename
+            table.to_csv(path, index=False)
+            output_paths[key] = path
+
+        _export_table("monte_carlo_summary", f"{prefix}_summary.csv")
+        _export_table("monte_carlo_distribution", f"{prefix}_distribution.csv")
+        _export_table("monte_carlo_percentiles", f"{prefix}_percentiles.csv")
+        _export_table("rate_paths_sample", f"{prefix}_rate_paths_sample.csv")
+        _export_table("rate_paths_summary", f"{prefix}_rate_paths_summary.csv")
+        _export_table("simulation_progress", f"{prefix}_simulation_progress.csv")
+        _export_table("validation", f"{prefix}_validation_summary.csv")
+
+        config_metadata = scenario.metadata.get("config") if scenario.metadata else None
+        if config_metadata:
+            config_path = self.output_dir / f"{prefix}_config.json"
+            with config_path.open("w", encoding="utf-8") as fh:
+                json.dump(config_metadata, fh, indent=2)
+            output_paths["config"] = config_path
+
+        return output_paths
 
     def export_monte_carlo_visuals(
         self,

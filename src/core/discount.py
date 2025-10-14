@@ -1,57 +1,65 @@
-"""Discount curve utilities."""
+"""Backward-compatible discount curve wrapper built on YieldCurve."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Iterable, Tuple
 
-import numpy as np
+from .yield_curve import YieldCurve
 
 
-@dataclass
-class DiscountCurve:
-    """Represents a term structure used for discounting cash flows."""
+class DiscountCurve(YieldCurve):
+    """Compatibility wrapper around YieldCurve used throughout the codebase."""
 
-    annual_rates: Dict[int, float]
+    def __init__(
+        self,
+        tenors: Iterable[int],
+        rates: Iterable[float],
+        *,
+        interpolation_method: str = "linear",
+    ) -> None:
+        super().__init__(tenors, rates, interpolation_method)
 
     @classmethod
-    def from_single_rate(cls, rate: float) -> "DiscountCurve":
-        """Create a flat discount curve."""
-        if rate < 0 or rate > 0.15:
-            raise ValueError("Discount rate must be between 0 and 15%")
-        return cls(annual_rates={12: rate})
+    def from_single_rate(cls, rate: float, *, tenor_months: int = 360) -> "DiscountCurve":
+        """Create a flat discount curve using a single annual rate."""
+        if rate < 0 or rate > 0.20:
+            raise ValueError("Discount rate must be between 0% and 20%.")
+        tenors = [3, 6, 12, 24, 36, 60, 120, tenor_months]
+        rates = [float(rate)] * len(tenors)
+        return cls(tenors, rates, interpolation_method="linear")
 
     @classmethod
-    def from_yield_curve(cls, tenor_rates: Dict[int, float]) -> "DiscountCurve":
-        """Create a curve from tenor-specific rates."""
-        invalid = [tenor for tenor, rate in tenor_rates.items() if rate < 0 or rate > 0.15]
+    def from_yield_curve(
+        cls,
+        tenor_rates: Dict[int, float],
+        *,
+        interpolation_method: str = "linear",
+    ) -> "DiscountCurve":
+        """Create a curve from tenor-specific annualised rates."""
+        if not tenor_rates:
+            raise ValueError("Tenor rates cannot be empty.")
+        invalid = [
+            tenor for tenor, value in tenor_rates.items() if float(value) < 0 or float(value) > 0.20
+        ]
         if invalid:
             raise ValueError(
-                "Invalid rate(s) detected for tenors: " + ", ".join(map(str, invalid))
+                f"Invalid rate(s) detected for tenors: {', '.join(map(str, invalid))}"
             )
-        return cls(annual_rates=dict(sorted(tenor_rates.items())))
+        tenors, rates = zip(*sorted(tenor_rates.items(), key=lambda item: item[0]))
+        return cls(tenors, rates, interpolation_method=interpolation_method)
 
-    def rate_for_month(self, month: int) -> float:
-        """Return the interpolated annualized rate for a given month."""
-        if not self.annual_rates:
-            raise ValueError("Discount curve is empty")
-        tenors, rates = zip(*sorted(self.annual_rates.items()))
-        months_array = np.array(tenors, dtype=float)
-        rates_array = np.array(rates, dtype=float)
-        if month <= months_array[0]:
-            return float(rates_array[0])
-        if month >= months_array[-1]:
-            return float(rates_array[-1])
-        return float(np.interp(month, months_array, rates_array))
+    def rate_for_month(self, month: int | float) -> float:
+        """Return the interpolated annualised rate for a given month (compat shim)."""
+        return float(self.get_rate(month))
 
-    def discount_factor(self, month: int) -> float:
-        """Return the discount factor for a given month."""
-        rate = self.rate_for_month(month)
-        return 1.0 / ((1 + rate) ** (month / 12))
+    def discount_factor(self, month: int | float) -> float:
+        """Return the discount factor for a given month (compat shim)."""
+        return float(self.get_discount_factor(month))
 
-    def iter_discount_factors(
-        self, months: Iterable[int]
-    ) -> Iterable[Tuple[int, float]]:
-        """Yield discount factors for the requested months."""
+    def iter_discount_factors(self, months: Iterable[int]) -> Iterable[Tuple[int, float]]:
+        """Yield discount factors for the requested months (compat shim)."""
         for month in months:
-            yield month, self.discount_factor(month)
+            yield int(month), float(self.get_discount_factor(month))
+
+
+__all__ = ["DiscountCurve"]

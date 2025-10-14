@@ -8,9 +8,11 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 - CSV/Excel ingestion with interactive field mapping prompts.
 - Support for multiple segmentation approaches (all accounts, by account type, by customer segment).
 - Manual capture of the core assumptions (decay, WAL, deposit betas up/down, repricing betas up/down).
-- Scenario generation for standard parallel rate shocks plus Monte Carlo simulations with configurable volatility and drift.
+- Yield curve discounting with linear, log-linear, or cubic interpolation.
+- One-click Treasury curve downloads from the FRED API or manual tenor entry.
+- Scenario generation for parallel/non-parallel curve shocks plus Monte Carlo simulations with configurable volatility and drift.
 - Account-level cash flow projection, terminal value capture, and present value calculation.
-- CSV report exports (scenario summary, cash flow detail, account-level PV) with optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
+- CSV/JSON report exports (scenario summary, discount curve snapshot, cash flow detail, account-level PV) with optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
 
 ## Getting Started
 1. Install dependencies:
@@ -36,10 +38,15 @@ After execution the CLI exports reports to the `output/` directory.
 The web app renders results in-browser and provides download buttons for summary,
 cashflow, and account-level PV CSVs.
 
+### Yield Curve Sources
+- **Single rate** – retains backwards compatibility for quick what-if analysis.
+- **FRED API** – supply a FRED API key (`FRED_API_KEY` environment variable or UI input) to pull the latest Treasury curve. Snapshots are saved to `output/discount_curve.json`.
+- **Manual curve** – enter tenor points (3M–10Y) directly in the CLI or web app.
+
 ### Supported Scenarios
-- Deterministic parallel shocks: rising and falling rate moves from ±100 bps through ±400 bps.
+- Deterministic parallel shocks: rising and falling rate moves from +/-100 bps through +/-400 bps.
+- Non-parallel shocks: steepener, flattener, and short-rate focused profiles derived from the base curve.
 - Monte Carlo simulations: configurable number of simulations, monthly volatility/drift inputs, and downloadable PV distributions.
-Additional non-parallel scenarios can be integrated in future phases.
 
 ## Project Structure
 ```

@@ -38,19 +38,32 @@ def extract_monte_carlo_data(
 
     rate_sample = tables.get("rate_paths_sample")
     rate_summary = tables.get("rate_paths_summary")
-    pv_distribution = tables.get("simulation_pv")
+    pv_distribution = tables.get("monte_carlo_distribution") or tables.get("simulation_pv")
     if pv_distribution is None:
         return None
 
-    book_value = None
-    if results.validation_summary:
-        book_value = results.validation_summary.get("portfolio_balance")
+    percentiles_table = tables.get("monte_carlo_percentiles") or tables.get("percentiles_table")
 
     base_case_pv = None
     if results.base_scenario_id and results.base_scenario_id in results.scenario_results:
         base_case_pv = results.scenario_results[results.base_scenario_id].present_value
 
-    percentiles = scenario_result.metadata.get("pv_percentiles", {})
+    metadata = scenario_result.metadata or {}
+    percentiles = metadata.get("pv_percentiles", {})
+    if not percentiles and percentiles_table is not None:
+        try:
+            percentiles = dict(
+                zip(
+                    percentiles_table["percentile"].astype(int),
+                    percentiles_table["portfolio_pv"].astype(float),
+                )
+            )
+        except Exception:  # pragma: no cover - fallback only
+            percentiles = {}
+
+    book_value = metadata.get("book_value")
+    if book_value is None and results.validation_summary:
+        book_value = results.validation_summary.get("portfolio_balance")
 
     return {
         "rate_sample": rate_sample,
@@ -59,6 +72,7 @@ def extract_monte_carlo_data(
         "percentiles": percentiles,
         "base_case_pv": base_case_pv,
         "book_value": book_value,
+        "percentiles_table": percentiles_table,
     }
 
 

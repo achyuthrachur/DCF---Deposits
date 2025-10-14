@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from base64 import b64encode
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -20,6 +21,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
+from src.core.fred_loader import FREDYieldCurveLoader
+from src.core.yield_curve import YieldCurve
+from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
 from src.reporting import ReportGenerator
 from src.visualization import (
     create_monte_carlo_dashboard,
@@ -81,6 +85,9 @@ SCENARIO_OPTIONS = [
     ("parallel_minus_200", "-200 bps parallel shock", False),
     ("parallel_minus_300", "-300 bps parallel shock", False),
     ("parallel_minus_400", "-400 bps parallel shock", False),
+    ("steepener", "Curve steepener (short down, long up)", False),
+    ("flattener", "Curve flattener (short up, long down)", False),
+    ("short_shock_up", "Short-rate shock up (+200 bps front-end)", False),
 ]
 
 TENOR_LABELS: List[Tuple[int, str]] = [
@@ -248,7 +255,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
     for segment in segments:
         defaults = _default_for_segment(segment)
         decay = st.number_input(
-            f"{segment} – Decay / Runoff Rate (annual decimal)",
+            f"{segment} â€“ Decay / Runoff Rate (annual decimal)",
             min_value=0.0,
             max_value=1.0,
             value=defaults["decay_rate"],
@@ -256,7 +263,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
             key=f"decay_{segment}",
         )
         wal = st.number_input(
-            f"{segment} – Weighted Average Life (years)",
+            f"{segment} â€“ Weighted Average Life (years)",
             min_value=0.1,
             max_value=15.0,
             value=defaults["wal_years"],
@@ -266,7 +273,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
         col1, col2 = st.columns(2)
         with col1:
             deposit_beta_up = st.number_input(
-                f"{segment} – Deposit Beta (rising rates)",
+                f"{segment} â€“ Deposit Beta (rising rates)",
                 min_value=0.0,
                 max_value=1.5,
                 value=defaults["deposit_beta_up"],
@@ -274,7 +281,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 key=f"deposit_beta_up_{segment}",
             )
             repricing_beta_up = st.number_input(
-                f"{segment} – Repricing Beta (rising rates)",
+                f"{segment} â€“ Repricing Beta (rising rates)",
                 min_value=0.0,
                 max_value=2.0,
                 value=defaults["repricing_beta_up"],
@@ -283,7 +290,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
             )
         with col2:
             deposit_beta_down = st.number_input(
-                f"{segment} – Deposit Beta (falling rates)",
+                f"{segment} â€“ Deposit Beta (falling rates)",
                 min_value=0.0,
                 max_value=1.5,
                 value=defaults["deposit_beta_down"],
@@ -291,7 +298,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 key=f"deposit_beta_down_{segment}",
             )
             repricing_beta_down = st.number_input(
-                f"{segment} – Repricing Beta (falling rates)",
+                f"{segment} â€“ Repricing Beta (falling rates)",
                 min_value=0.0,
                 max_value=2.0,
                 value=defaults["repricing_beta_down"],
@@ -309,7 +316,10 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
     return assumption_values
 
 
-def _collect_scenarios() -> Tuple[Dict[str, bool], Optional[Dict[str, float]]]:
+
+def _collect_scenarios(
+    projection_months: int,
+) -> Tuple[Dict[str, bool], Optional[MonteCarloConfig]]:
     """Capture scenario selections from the user."""
     st.markdown("#### Scenario Selection")
     scenario_flags = {"base": True}
@@ -320,61 +330,164 @@ def _collect_scenarios() -> Tuple[Dict[str, bool], Optional[Dict[str, float]]]:
             scenario_flags[scenario_id] = st.checkbox(
                 label, value=default, key=f"scenario_{scenario_id}"
             )
-    monte_carlo_config: Optional[Dict[str, float]] = None
+
+    monte_carlo_config: Optional[MonteCarloConfig] = None
     with st.expander("Monte Carlo simulation", expanded=False):
         enable_mc = st.checkbox("Run Monte Carlo simulation", value=False, key="scenario_monte_carlo")
         st.caption(
-            "Monte Carlo draws apply quarterly rate shocks (decimal). "
-            "Results include expected cash flow and PV distribution statistics."
+            "Monte Carlo draws generate stochastic rate paths used for deposit repricing and discounting."
         )
         if enable_mc:
             scenario_flags["monte_carlo"] = True
-            mc_cols = st.columns(4)
-            with mc_cols[0]:
-                num_sim = st.number_input(
-                    "Simulations",
-                    min_value=100,
-                    max_value=10000,
-                    value=1000,
-                    step=100,
-                )
-            with mc_cols[1]:
-                quarterly_vol_bps = st.number_input(
-                    "Volatility (bps / quarter)",
+            level_choice = st.radio(
+                "Implementation level",
+                options=[
+                    "Level 1 - Static yield curve",
+                    "Level 2 - Two-factor correlated curve",
+                ],
+                index=1,
+                key="mc_level",
+            )
+            level = (
+                MonteCarloLevel.TWO_FACTOR
+                if level_choice.startswith("Level 2")
+                else MonteCarloLevel.STATIC_CURVE
+            )
+
+            num_sim = st.number_input(
+                "Simulations",
+                min_value=100,
+                max_value=10000,
+                value=1000,
+                step=100,
+                key="mc_simulations",
+            )
+            seed_input = st.text_input("Random seed (optional)", value="", key="mc_seed")
+            random_seed = int(seed_input.strip()) if seed_input.strip().isdigit() else None
+
+            short_col = st.columns(3)
+            with short_col[0]:
+                short_a = st.number_input(
+                    "Short mean reversion (a)",
                     min_value=0.0,
-                    max_value=500.0,
-                    value=25.0,
-                    step=5.0,
+                    max_value=1.0,
+                    value=0.15,
+                    step=0.01,
+                    key="mc_short_a",
                 )
-            with mc_cols[2]:
-                quarterly_drift_bps = st.number_input(
-                    "Drift (bps / quarter)",
-                    min_value=-200.0,
-                    max_value=200.0,
-                    value=0.0,
-                    step=1.0,
+            with short_col[1]:
+                short_b = st.number_input(
+                    "Short long-term mean (b)",
+                    min_value=0.0,
+                    max_value=0.20,
+                    value=0.03,
+                    step=0.001,
+                    format="%.3f",
+                    key="mc_short_b",
                 )
-            with mc_cols[3]:
-                seed_input = st.text_input("Random seed (optional)", value="")
+            with short_col[2]:
+                short_sigma = st.number_input(
+                    "Short volatility (sigma)",
+                    min_value=0.0,
+                    max_value=0.10,
+                    value=0.01,
+                    step=0.001,
+                    format="%.3f",
+                    key="mc_short_sigma",
+                )
+            short_params = VasicekParams(
+                mean_reversion=float(short_a),
+                long_term_mean=float(short_b),
+                volatility=float(short_sigma),
+            )
 
-            symmetric = st.checkbox("Use symmetric shocks (+Z/−Z)", value=False, key="mc_symmetric")
-            opposite_drift = st.checkbox("Pair opposite drift signs", value=False, key="mc_opposite_drift")
-            fixed_mag = st.checkbox("Use fixed ±vol shocks", value=False, key="mc_fixed_mag")
+            long_params = None
+            correlation = 0.70
+            if level == MonteCarloLevel.TWO_FACTOR:
+                long_col = st.columns(3)
+                with long_col[0]:
+                    long_a = st.number_input(
+                        "Long mean reversion (a)",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=0.05,
+                        step=0.01,
+                        key="mc_long_a",
+                    )
+                with long_col[1]:
+                    long_b = st.number_input(
+                        "Long long-term mean (b)",
+                        min_value=0.0,
+                        max_value=0.20,
+                        value=0.035,
+                        step=0.001,
+                        format="%.3f",
+                        key="mc_long_b",
+                    )
+                with long_col[2]:
+                    long_sigma = st.number_input(
+                        "Long volatility (sigma)",
+                        min_value=0.0,
+                        max_value=0.10,
+                        value=0.008,
+                        step=0.001,
+                        format="%.3f",
+                        key="mc_long_sigma",
+                    )
+                long_params = VasicekParams(
+                    mean_reversion=float(long_a),
+                    long_term_mean=float(long_b),
+                    volatility=float(long_sigma),
+                )
+                correlation = st.slider(
+                    "Correlation between short and long rates",
+                    min_value=-0.95,
+                    max_value=0.95,
+                    value=0.70,
+                    step=0.05,
+                    key="mc_correlation",
+                )
 
-            monte_carlo_config = {
-                "num_simulations": float(num_sim),
-                "quarterly_volatility": quarterly_vol_bps / 10000,
-                "quarterly_drift": quarterly_drift_bps / 10000,
-                "symmetric_shocks": symmetric,
-                "pair_opposite_drift": opposite_drift,
-                "use_fixed_magnitude": fixed_mag,
-            }
-            if seed_input.strip():
-                try:
-                    monte_carlo_config["random_seed"] = float(int(seed_input.strip()))
-                except ValueError:
-                    st.warning("Random seed must be an integer. Ignoring input.")
+            save_paths = st.checkbox("Save rate path samples", value=True, key="mc_save_paths")
+            sample_size = 0
+            if save_paths:
+                sample_size = int(
+                    st.number_input(
+                        "Rate path sample size",
+                        min_value=10,
+                        max_value=500,
+                        value=100,
+                        step=10,
+                        key="mc_sample_size",
+                    )
+                )
+
+            generate_reports = st.checkbox(
+                "Generate detailed Monte Carlo reports", value=True, key="mc_reports"
+            )
+            interpolation_method = st.selectbox(
+                "Yield curve interpolation",
+                options=["linear", "log-linear", "cubic"],
+                index=0,
+                key="mc_interp",
+            )
+
+            monte_carlo_config = MonteCarloConfig(
+                level=level,
+                num_simulations=int(num_sim),
+                projection_months=projection_months,
+                random_seed=random_seed,
+                short_rate=short_params,
+                long_rate=long_params,
+                correlation=float(correlation),
+                save_rate_paths=save_paths,
+                generate_reports=generate_reports,
+                sample_size=sample_size if save_paths else 0,
+                interpolation_method=interpolation_method,
+            )
+
     return scenario_flags, monte_carlo_config
+
 
 
 def _download_button(label: str, dataframe: pd.DataFrame, filename: str) -> None:
@@ -400,7 +513,7 @@ def main() -> None:
     """Streamlit application entry point."""
     st.set_page_config(
         page_title="ALM Validation - Deposit Accounts: DCF Calculation Engine",
-        page_icon="📊",
+        page_icon="ðŸ“Š",
         layout="wide",
     )
 
@@ -590,7 +703,7 @@ def main() -> None:
     st.markdown(
         """
         <div class="hero-card">
-            <h1>ALM Validation – Deposit Accounts: DCF Calculation Engine</h1>
+            <h1>ALM Validation â€“ Deposit Accounts: DCF Calculation Engine</h1>
             <div class="accent-line"></div>
             <p>
                 This interactive engine empowers ALM teams to validate non-maturity deposit assumptions,
@@ -614,7 +727,7 @@ def main() -> None:
                 </div>
                 <div class="flow-step">
                     <span>4</span>
-                    Run parallel shocks from ±100 bps to ±400 bps or launch Monte Carlo simulations with
+                    Run parallel shocks from Â±100 bps to Â±400 bps or launch Monte Carlo simulations with
                     user-defined volatility and drift.
                 </div>
                 <div class="flow-step">
@@ -662,7 +775,7 @@ def main() -> None:
         st.info("Awaiting CSV upload to begin.")
         return
 
-    st.markdown("### Step 1 – Preview Data & Map Fields")
+    st.markdown("### Step 1 â€“ Preview Data & Map Fields")
     st.dataframe(df_raw.head(10))
     columns = list(df_raw.columns)
     defaults = _infer_defaults(columns)
@@ -724,12 +837,12 @@ def main() -> None:
 
     mapped_df: pd.DataFrame = st.session_state["mapped_df"]
 
-    st.markdown("### Step 2 – Configure Segmentation & Assumptions")
+    st.markdown("### Step 2 â€“ Configure Segmentation & Assumptions")
     segmentation_friendly = {
         "All accounts as one segment": "all",
         "Segment by account type": "by_account_type",
         "Segment by customer segment": "by_customer_segment",
-        "Cross segmentation (account × customer)": "cross",
+        "Cross segmentation (account Ã— customer)": "cross",
     }
     segmentation_choice = st.selectbox(
         "Segmentation method",
@@ -757,7 +870,7 @@ def main() -> None:
 
     assumptions = _prepare_assumption_inputs(segments)
 
-    st.markdown("### Step 3 – Projection Settings")
+    st.markdown("### Step 3 â€“ Projection Settings")
     projection_months = st.number_input(
         "Projection horizon (months)",
         min_value=12,
@@ -768,25 +881,77 @@ def main() -> None:
 
     discount_method = st.radio(
         "Discount rate configuration",
-        options=["Single rate", "Yield curve"],
-        index=0,
+        options=["Single rate", "Fetch from FRED", "Manual yield curve"],
+        index=1,
         horizontal=True,
     )
-    discount_config: Dict[int, float] | float
+
+    discount_config: Dict[str, object]
     if discount_method == "Single rate":
         discount_rate_input = st.number_input(
             "Discount rate (annual decimal, e.g., 0.035 for 3.5%)",
             min_value=0.0,
-            max_value=0.15,
+            max_value=0.20,
             value=0.035,
             step=0.005,
         )
-        discount_config = discount_rate_input
+        discount_config = {"mode": "single", "rate": discount_rate_input}
+    elif discount_method == "Fetch from FRED":
+        fred_api_key_default = os.environ.get("FRED_API_KEY", "")
+        fred_api_key = st.text_input(
+            "FRED API key",
+            value=fred_api_key_default,
+            type="password",
+            help="Store a FRED API key in the FRED_API_KEY environment variable for convenience.",
+            key="fred_api_key_input",
+        )
+        interpolation_method = st.selectbox(
+            "Interpolation method",
+            options=["linear", "log-linear", "cubic"],
+            index=0,
+            key="fred_interpolation",
+        )
+        if st.button("Fetch current curve", use_container_width=True):
+            if not fred_api_key:
+                st.error("FRED API key is required to fetch the Treasury curve.")
+            else:
+                with st.spinner("Fetching latest Treasury curve from FRED..."):
+                    try:
+                        loader = FREDYieldCurveLoader(fred_api_key)
+                        curve_snapshot = loader.get_current_yield_curve(
+                            interpolation_method=interpolation_method
+                        )
+                        st.session_state["fred_curve_snapshot"] = curve_snapshot
+                        st.success(
+                            f"Curve loaded (as of {curve_snapshot.metadata.get('as_of', 'latest')})."
+                        )
+                    except Exception as exc:  # pragma: no cover - network failure
+                        st.error(f"Unable to fetch curve: {exc}")
+
+        curve_snapshot: Optional[YieldCurve] = st.session_state.get("fred_curve_snapshot")
+        if curve_snapshot:
+            st.caption(
+                "Latest fetched curve: "
+                + ", ".join(
+                    f"{int(tenor)}M {rate * 100:.2f}%"
+                    for tenor, rate in zip(curve_snapshot.tenors, curve_snapshot.rates)
+                )
+            )
+        else:
+            st.info("Click 'Fetch current curve' after entering your API key.")
+
+        discount_config = {
+            "mode": "fred",
+            "api_key": fred_api_key,
+            "interpolation": interpolation_method,
+        }
     else:
-        st.write("Enter rates for each tenor. Leave blank to omit a point.")
+        st.write("Enter annualised rates for each tenor (leave blank to omit).")
         tenor_values: Dict[int, float] = {}
-        for tenor, label in TENOR_LABELS:
-            value = st.text_input(label, value="", key=f"tenor_{tenor}")
+        columns = st.columns(2)
+        for idx, (tenor, label) in enumerate(TENOR_LABELS):
+            with columns[idx % 2]:
+                value = st.text_input(label, value="", key=f"tenor_{tenor}")
             if value.strip():
                 try:
                     tenor_values[tenor] = _decimalize(float(value.strip()))
@@ -794,9 +959,19 @@ def main() -> None:
                     st.error(f"Invalid numeric value for {label}.")
                     return
         if not tenor_values:
-            st.error("At least one tenor rate is required for yield curve configuration.")
+            st.error("At least one tenor rate is required for manual yield curve configuration.")
             return
-        discount_config = tenor_values
+        interpolation_method = st.selectbox(
+            "Interpolation method",
+            options=["linear", "log-linear", "cubic"],
+            index=0,
+            key="manual_curve_interpolation",
+        )
+        discount_config = {
+            "mode": "manual",
+            "tenor_rates": tenor_values,
+            "interpolation": interpolation_method,
+        }
 
     base_rate_input = st.number_input(
         "Base market rate (annual decimal, e.g., 0.03 for 3%)",
@@ -806,7 +981,7 @@ def main() -> None:
         step=0.005,
     )
 
-    scenario_flags, monte_carlo_config = _collect_scenarios()
+    scenario_flags, monte_carlo_config = _collect_scenarios(int(projection_months))
 
     run_clicked = st.button("Run Analysis", type="primary")
 
@@ -833,23 +1008,32 @@ def main() -> None:
                     repricing_beta_up=_decimalize(values["repricing_beta_up"]),
                     repricing_beta_down=_decimalize(values["repricing_beta_down"]),
                 )
-            if isinstance(discount_config, dict):
-                engine.set_discount_yield_curve(discount_config)
-            else:
-                engine.set_discount_single_rate(_decimalize(discount_config))
+            mode = discount_config.get("mode")
+            if mode == "single":
+                engine.set_discount_single_rate(_decimalize(discount_config["rate"]))
+            elif mode == "manual":
+                engine.set_discount_yield_curve(
+                    {int(k): _decimalize(v) for k, v in discount_config["tenor_rates"].items()},
+                    interpolation_method=discount_config.get("interpolation", "linear"),
+                    source="manual",
+                )
+            elif mode == "fred":
+                fred_api_key = discount_config.get("api_key", "")
+                interpolation = discount_config.get("interpolation", "linear")
+                if fred_api_key:
+                    engine.set_discount_curve_from_fred(
+                        fred_api_key,
+                        interpolation_method=interpolation,
+                    )
+                else:
+                    curve_snapshot = st.session_state.get("fred_curve_snapshot")
+                    if not curve_snapshot:
+                        st.error("Fetch a FRED curve or provide an API key before running analysis.")
+                        return
+                    engine.set_discount_curve(curve_snapshot, source="fred")
             engine.set_base_market_rate_path(_decimalize(base_rate_input))
             if monte_carlo_config:
-                engine.set_monte_carlo_config(
-                    num_simulations=int(monte_carlo_config["num_simulations"]),
-                    quarterly_volatility=float(monte_carlo_config["quarterly_volatility"]),
-                    quarterly_drift=float(monte_carlo_config["quarterly_drift"]),
-                    random_seed=int(monte_carlo_config["random_seed"])
-                    if "random_seed" in monte_carlo_config
-                    else None,
-                    symmetric_shocks=bool(monte_carlo_config.get("symmetric_shocks", False)),
-                    pair_opposite_drift=bool(monte_carlo_config.get("pair_opposite_drift", False)),
-                    use_fixed_magnitude=bool(monte_carlo_config.get("use_fixed_magnitude", False)),
-                )
+                engine.set_monte_carlo_config(monte_carlo_config)
             engine.configure_standard_scenarios(scenario_flags)
             progress_text = st.empty()
             progress_bar = st.progress(0)
@@ -902,7 +1086,7 @@ def main() -> None:
     scenario_method = scenario_result.metadata.get("method", "")
 
     if scenario_method == "monte_carlo":
-        st.markdown(f"### Expected Cash Flow Detail – {selected_scenario}")
+        st.markdown(f"### Expected Cash Flow Detail â€“ {selected_scenario}")
         st.dataframe(scenario_result.cashflows)
         _download_button(
             f"Download expected cashflows ({selected_scenario})",
@@ -968,7 +1152,7 @@ def main() -> None:
             .reset_index()
         )
 
-        st.markdown(f"### Cash Flow Detail – {selected_scenario}")
+        st.markdown(f"### Cash Flow Detail â€“ {selected_scenario}")
         st.dataframe(monthly_summary)
         sampled_cashflows = ReportGenerator.sample_cashflows(
             cashflows, sample_size=CASHFLOW_SAMPLE_SIZE

@@ -9,3 +9,4 @@ streamlit>=1.35
 matplotlib>=3.8
 seaborn>=0.13
 plotly>=5.20
+fredapi>=0.5

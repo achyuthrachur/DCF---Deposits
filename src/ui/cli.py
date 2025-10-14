@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -16,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.engine import ALMEngine
+from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
 from src.reporting import ReportGenerator
 
 app = typer.Typer(help="Non-maturity deposit ALM cash flow projection engine")
@@ -188,7 +190,93 @@ def _collect_segments(df: pd.DataFrame, segmentation: str) -> List[str]:
     return segments
 
 
-def _prompt_scenario_selection() -> tuple[Dict[str, bool], Optional[Dict[str, float]]]:
+
+def _prompt_monte_carlo_config(projection_months: int) -> Optional[MonteCarloConfig]:
+    """Collect Monte Carlo configuration settings from the user."""
+    if not typer.confirm("Run Monte Carlo simulation?", default=False):
+        return None
+
+    level_input = typer.prompt(
+        "Implementation level (1 = Static curve, 2 = Two-factor)",
+        default="1",
+    ).strip()
+    try:
+        level = MonteCarloLevel(int(level_input))
+    except (ValueError, KeyError):
+        raise typer.BadParameter("Implementation level must be 1 or 2.")
+
+    num_sim = int(typer.prompt("Number of simulations", default="1000"))
+    if not (100 <= num_sim <= 10000):
+        raise typer.BadParameter("Number of simulations must be between 100 and 10,000.")
+
+    seed_text = typer.prompt("Random seed (leave blank for random)", default="").strip()
+    random_seed = int(seed_text) if seed_text else None
+
+    def _prompt_vasicek(prefix: str, defaults: VasicekParams) -> VasicekParams:
+        mean_reversion = float(
+            typer.prompt(
+                f"{prefix} mean reversion speed (a)",
+                default=f"{defaults.mean_reversion:.2f}",
+            )
+        )
+        long_term_mean = _as_decimal(
+            typer.prompt(
+                f"{prefix} long-term mean (b)",
+                default=f"{defaults.long_term_mean:.3f}",
+            )
+        )
+        volatility = float(
+            typer.prompt(
+                f"{prefix} volatility (sigma)",
+                default=f"{defaults.volatility:.3f}",
+            )
+        )
+        return VasicekParams(
+            mean_reversion=mean_reversion,
+            long_term_mean=long_term_mean,
+            volatility=volatility,
+        )
+
+    short_defaults = VasicekParams(mean_reversion=0.15, long_term_mean=0.03, volatility=0.01)
+    short_params = _prompt_vasicek("Short rate", short_defaults)
+
+    long_params = None
+    correlation = 0.70
+    if level == MonteCarloLevel.TWO_FACTOR:
+        long_defaults = VasicekParams(mean_reversion=0.05, long_term_mean=0.035, volatility=0.008)
+        long_params = _prompt_vasicek("Long rate", long_defaults)
+        correlation = float(typer.prompt("Correlation between short and long rates (rho)", default="0.70"))
+        correlation = max(min(correlation, 0.99), -0.99)
+
+    save_paths = typer.confirm("Save rate path samples?", default=True)
+    sample_size = 0
+    if save_paths:
+        sample_size = int(typer.prompt("Rate path sample size", default="100"))
+
+    generate_reports = typer.confirm("Generate detailed Monte Carlo reports?", default=True)
+    interpolation_method = (
+        typer.prompt("Yield curve interpolation method", default="linear").strip().lower()
+        or "linear"
+    )
+
+    return MonteCarloConfig(
+        level=level,
+        num_simulations=num_sim,
+        projection_months=projection_months,
+        random_seed=random_seed,
+        short_rate=short_params,
+        long_rate=long_params,
+        correlation=correlation,
+        save_rate_paths=save_paths,
+        generate_reports=generate_reports,
+        sample_size=max(sample_size, 0),
+        interpolation_method=interpolation_method,
+    )
+
+
+def _prompt_scenario_selection(
+    projection_months: int,
+) -> tuple[Dict[str, bool], Optional[MonteCarloConfig]]:
     """Ask user which standard scenarios to run."""
     console.print("\n[bold]Scenario Selection[/bold]")
     scenarios = {
@@ -201,34 +289,18 @@ def _prompt_scenario_selection() -> tuple[Dict[str, bool], Optional[Dict[str, fl
         "parallel_minus_200": typer.confirm("-200 bps parallel shock?", default=False),
         "parallel_minus_300": typer.confirm("-300 bps parallel shock?", default=False),
         "parallel_minus_400": typer.confirm("-400 bps parallel shock?", default=False),
+        "steepener": typer.confirm("Curve steepener (short down, long up)?", default=False),
+        "flattener": typer.confirm("Curve flattener (short up, long down)?", default=False),
+        "short_shock_up": typer.confirm("Short-rate shock up (+200 bps front-end)?", default=False),
     }
-    monte_carlo_config: Optional[Dict[str, float]] = None
-    if typer.confirm("Run Monte Carlo simulation?", default=False):
+
+    mc_config = _prompt_monte_carlo_config(projection_months)
+    if mc_config is not None:
         scenarios["monte_carlo"] = True
-        num_sim = int(
-            typer.prompt("Number of simulations", default="1000")
-        )
-        vol_bps = float(
-            typer.prompt("Quarterly volatility (bps)", default="25")
-        )
-        drift_bps = float(
-            typer.prompt("Quarterly drift (bps)", default="0")
-        )
-        symmetric = typer.confirm("Use symmetric shocks (pair +Z/-Z)?", default=False)
-        opposite_drift = typer.confirm("Pair opposite drift signs?", default=False)
-        fixed_mag = typer.confirm("Use fixed ±vol shocks (Rademacher)?", default=False)
-        seed_value = typer.prompt("Random seed (leave blank for random)", default="")
-        monte_carlo_config = {
-            "num_simulations": num_sim,
-            "quarterly_volatility": vol_bps / 10000,
-            "quarterly_drift": drift_bps / 10000,
-            "symmetric_shocks": symmetric,
-            "pair_opposite_drift": opposite_drift,
-            "use_fixed_magnitude": fixed_mag,
-        }
-        if seed_value.strip():
-            monte_carlo_config["random_seed"] = int(seed_value.strip())
-    return scenarios, monte_carlo_config
+
+    return scenarios, mc_config
+
+
 
 
 @app.command()
@@ -291,28 +363,83 @@ def run(
             engine.set_assumptions(segment, **values)
 
     console.print("\n[bold]Discount Rate Configuration[/bold]")
-    if typer.confirm("Use a single discount rate for all periods?", default=True):
+    console.print(
+        "1) Single discount rate (flat)\n"
+        "2) Fetch current Treasury curve from FRED (recommended)\n"
+        "3) Manually enter yield curve tenors"
+    )
+    discount_choice = (
+        typer.prompt("Select option [1/2/3]", default="2").strip().lower()
+    )
+
+    tenor_labels = [
+        (3, "3 Month"),
+        (6, "6 Month"),
+        (12, "1 Year"),
+        (24, "2 Year"),
+        (36, "3 Year"),
+        (60, "5 Year"),
+        (84, "7 Year"),
+        (120, "10 Year"),
+    ]
+
+    if discount_choice == "1":
         rate = _as_decimal(typer.prompt("Discount rate (annual decimal)", default="0.035"))
         engine.set_discount_single_rate(rate)
-    else:
-        console.print("Enter rates for tenors in months (leave blank to skip):")
+        console.print(f"Using flat discount rate of {rate * 100:.2f}%")
+    elif discount_choice == "2":
+        default_api_key = os.environ.get("FRED_API_KEY")
+        placeholder = "[env]" if default_api_key else ""
+        user_value = typer.prompt(
+            "Enter FRED API key (set FRED_API_KEY env var to avoid typing each run)",
+            default=placeholder,
+        ).strip()
+        api_key = default_api_key if (user_value in ("", "[env]") and default_api_key) else user_value
+        if not api_key:
+            raise typer.BadParameter("FRED API key is required to fetch the curve.")
+        interpolation_method = (
+            typer.prompt("Interpolation method (linear/log-linear/cubic)", default="linear")
+            .strip()
+            .lower()
+            or "linear"
+        )
+        curve = engine.set_discount_curve_from_fred(
+            api_key,
+            interpolation_method=interpolation_method,
+        )
+        as_of = curve.metadata.get("as_of", "latest")
+        console.print(f"[green]FRED curve loaded (as of {as_of}).[/green]")
+        display_rows = [
+            f"{int(tenor):>3}M: {rate * 100:.2f}%"
+            for tenor, rate in zip(curve.tenors, curve.rates)
+        ]
+        console.print("  " + "  |  ".join(display_rows))
+    elif discount_choice == "3":
+        console.print("Enter annualised rates for each tenor (leave blank to skip).")
         tenor_map: Dict[int, float] = {}
-        for tenor, label in [
-            (3, "3 Months"),
-            (6, "6 Months"),
-            (12, "1 Year"),
-            (24, "2 Years"),
-            (36, "3 Years"),
-            (60, "5 Years"),
-            (84, "7 Years"),
-            (120, "10 Years"),
-        ]:
-            value = typer.prompt(label, default="")
+        for tenor, label in tenor_labels:
+            value = typer.prompt(f"{label}", default="")
             if value:
                 tenor_map[tenor] = _as_decimal(value)
         if not tenor_map:
-            raise typer.BadParameter("At least one tenor rate is required for yield curve mode.")
-        engine.set_discount_yield_curve(tenor_map)
+            raise typer.BadParameter("At least one tenor rate is required for manual yield curve mode.")
+        interpolation_method = (
+            typer.prompt("Interpolation method (linear/log-linear/cubic)", default="linear")
+            .strip()
+            .lower()
+            or "linear"
+        )
+        engine.set_discount_yield_curve(
+            tenor_map,
+            interpolation_method=interpolation_method,
+            source="manual",
+        )
+        console.print(
+            "Manual yield curve registered: "
+            + "  |  ".join(f"{tenor:>3}M {rate * 100:.2f}%" for tenor, rate in sorted(tenor_map.items()))
+        )
+    else:
+        raise typer.BadParameter("Invalid discount configuration selection. Choose 1, 2, or 3.")
 
     console.print("\n[bold]Base Market Rate[/bold]")
     base_rate = _as_decimal(
@@ -320,19 +447,9 @@ def run(
     )
     engine.set_base_market_rate_path(base_rate)
 
-    scenario_flags, monte_carlo_config = _prompt_scenario_selection()
+    scenario_flags, monte_carlo_config = _prompt_scenario_selection(projection_months)
     if monte_carlo_config:
-        engine.set_monte_carlo_config(
-            num_simulations=int(monte_carlo_config["num_simulations"]),
-            quarterly_volatility=float(monte_carlo_config["quarterly_volatility"]),
-            quarterly_drift=float(monte_carlo_config["quarterly_drift"]),
-            random_seed=int(monte_carlo_config["random_seed"])
-            if "random_seed" in monte_carlo_config
-            else None,
-            symmetric_shocks=bool(monte_carlo_config.get("symmetric_shocks", False)),
-            pair_opposite_drift=bool(monte_carlo_config.get("pair_opposite_drift", False)),
-            use_fixed_magnitude=bool(monte_carlo_config.get("use_fixed_magnitude", False)),
-        )
+        engine.set_monte_carlo_config(monte_carlo_config)
     engine.configure_standard_scenarios(scenario_flags)
 
     console.print("\n[bold]Running projections...[/bold]")
@@ -343,6 +460,10 @@ def run(
     base_cashflow_path = reporter.export_cashflows(
         results, "base", sample_size=max(0, cashflow_sample_size)
     )
+    discount_path = reporter.export_discount_configuration(engine.discount_configuration())
+    monte_carlo_exports: Dict[str, Path] = {}
+    if "monte_carlo" in results.scenario_results:
+        monte_carlo_exports = reporter.export_monte_carlo_tables(results)
     plot_paths = {}
     if generate_plots:
         plot_paths = reporter.export_monte_carlo_visuals(results)
@@ -350,10 +471,15 @@ def run(
     console.print("\n[bold green]Analysis complete![/bold green]")
     console.print(f"Summary exported to: {summary_path}")
     console.print(f"Base cash flows exported to: {base_cashflow_path}")
+    console.print(f"Discount configuration exported to: {discount_path}")
+    if monte_carlo_exports:
+        console.print("Monte Carlo artefacts:")
+        for name, path in monte_carlo_exports.items():
+            console.print(f"  - {name}: {path}")
     if plot_paths:
         console.print("Generated Monte Carlo charts:")
         for name, path in plot_paths.items():
-            console.print(f"  • {name}: {path}")
+            console.print(f"  - {name}: {path}")
     console.print("Additional scenarios can be exported using the reporting module.")
 
 
