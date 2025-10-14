@@ -14,11 +14,13 @@ st.cache_data.clear()
 st.cache_resource.clear()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = PROJECT_ROOT.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
+from src.reporting import ReportGenerator
 from src.visualization import (
     create_monte_carlo_dashboard,
     create_rate_path_animation,
@@ -139,8 +141,12 @@ def _decimalize(value: float) -> float:
 @st.cache_data(show_spinner=False)
 def _load_logo_data_uri() -> Optional[str]:
     """Return the Crowe brand mark as a base64 data URI for embedding."""
-    logo_path = PROJECT_ROOT / "assets" / "crowe_logo.svg"
-    if not logo_path.exists():
+    search_paths = [
+        REPO_ROOT / "assets" / "crowe_logo.svg",
+        PROJECT_ROOT / "assets" / "crowe_logo.svg",
+    ]
+    logo_path = next((path for path in search_paths if path.exists()), None)
+    if logo_path is None:
         return None
     try:
         encoded = b64encode(logo_path.read_bytes()).decode("utf-8")
