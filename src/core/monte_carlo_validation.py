@@ -66,7 +66,7 @@ def validate_distribution(
     """Validate ordering and dispersion of Monte Carlo PV results."""
     failed: list[str] = []
     warnings: list[str] = []
-    if not pv_values:
+    if len(pv_values) == 0:
         failed.append("no_pv_values")
         return ValidationResult(status="FAIL", failed_checks=failed, warnings=warnings)
 
