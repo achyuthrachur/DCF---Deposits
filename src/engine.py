@@ -364,7 +364,6 @@ class ALMEngine:
                     scenario=scenario,
                     projector=projector,
                     settings=settings,
-                    pv_calculator=pv_calculator,
                     progress_callback=lambda s, _t, m: emit_progress(s, m),
                     step_offset=current_step,
                     total_steps=total_steps,
