@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
-import streamlit as st
+import streamlit as st\n\nfrom src.config import FRED_API_KEY
 
 st.cache_data.clear()
 st.cache_resource.clear()
@@ -917,7 +917,7 @@ def main() -> None:
         selected_curve = YieldCurve(flat_tenors, flat_rates, metadata={"source": "single_rate"})
         selected_interpolation = "linear"
     elif discount_method == "Fetch from FRED":
-        fred_api_key_default = os.environ.get("FRED_API_KEY", "")
+        fred_api_key_default = os.environ.get("FRED_API_KEY", FRED_API_KEY)
         fred_api_key = st.text_input(
             "FRED API key",
             value=fred_api_key_default,
@@ -1080,7 +1080,7 @@ def main() -> None:
                     source="manual",
                 )
             elif mode == "fred":
-                fred_api_key = discount_config.get("api_key") or os.environ.get("FRED_API_KEY", "")
+                fred_api_key = discount_config.get("api_key") or os.environ.get("FRED_API_KEY", FRED_API_KEY)
                 interpolation = discount_config.get("interpolation", "linear")
                 target_date = discount_config.get("target_date")
                 if fred_api_key:
@@ -1245,6 +1245,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 

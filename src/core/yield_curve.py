@@ -37,8 +37,10 @@ class YieldCurve:
         if np.any(np.isnan(rates_arr)) or np.any(np.isinf(rates_arr)):
             raise ValueError("Yield curve rates must be finite numbers.")
 
-        self.tenors = tenors_arr
-        self.rates = rates_arr
+        self._tenor_array = tenors_arr
+        self._rate_array = rates_arr
+        self.tenors = tuple(float(t) for t in tenors_arr.tolist())
+        self.rates = tuple(float(r) for r in rates_arr.tolist())
         self.interpolation_method = self.interpolation_method.lower().strip() or "linear"
 
         if self.interpolation_method not in {"linear", "log-linear", "cubic"}:
@@ -54,7 +56,7 @@ class YieldCurve:
                     "Cubic interpolation requires at least four tenor points."
                 )
             # Natural spline avoids exaggerated end-point curvature.
-            self._cubic_spline = CubicSpline(self.tenors, self.rates, bc_type="natural")
+            self._cubic_spline = CubicSpline(self._tenor_array, self._rate_array, bc_type="natural")
 
     def get_rate(self, months: int | float | Sequence[float]) -> float | np.ndarray:
         """Return the annualised rate(s) corresponding to the requested month(s)."""
@@ -63,11 +65,11 @@ class YieldCurve:
             raise ValueError("Month values must be positive.")
 
         if self.interpolation_method == "linear":
-            interpolated = np.interp(values, self.tenors, self.rates, left=self.rates[0], right=self.rates[-1])
+            interpolated = np.interp(values, self._tenor_array, self._rate_array, left=self._rate_array[0], right=self._rate_array[-1])
         elif self.interpolation_method == "log-linear":
-            log_rates = np.log1p(self.rates)
+            log_rates = np.log1p(self._rate_array)
             interpolated = np.expm1(
-                np.interp(values, self.tenors, log_rates, left=log_rates[0], right=log_rates[-1])
+                np.interp(values, self._tenor_array, log_rates, left=log_rates[0], right=log_rates[-1])
             )
         else:  # cubic
             assert self._cubic_spline is not None  # for type-checking
@@ -98,7 +100,7 @@ class YieldCurve:
     def apply_parallel_shock(self, shock_bps: float) -> "YieldCurve":
         """Return a new yield curve with a parallel shock applied (in basis points)."""
         shock_decimal = float(shock_bps) / 10000.0
-        shocked_rates = np.maximum(self.rates + shock_decimal, 0.0)
+        shocked_rates = np.maximum(self._rate_array + shock_decimal, 0.0)
         return YieldCurve(self.tenors, shocked_rates, self.interpolation_method, metadata=dict(self.metadata))
 
     def apply_non_parallel_shock(self, shocks_by_tenor: Dict[int, float]) -> "YieldCurve":

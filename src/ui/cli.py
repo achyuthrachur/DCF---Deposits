@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.engine import ALMEngine
 from src.core.discount import DiscountCurve
 from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
+from src.config import FRED_API_KEY
 from src.reporting import ReportGenerator
 
 app = typer.Typer(help="Non-maturity deposit ALM cash flow projection engine")
@@ -412,19 +413,12 @@ def run(
         engine.set_discount_single_rate(rate)
         console.print(f"Using flat discount rate of {rate * 100:.2f}%")
     elif discount_choice == "2":
-        default_api_key = os.environ.get("FRED_API_KEY")
-        if default_api_key:
-            console.print("Using FRED_API_KEY from environment (press Enter to accept).")
-        placeholder = "[env]" if default_api_key else ""
-        user_value = typer.prompt(
-            "Enter FRED API key (set FRED_API_KEY env var to avoid typing each run)",
-            default=placeholder,
-        ).strip()
-        api_key = default_api_key if (user_value in ("", "[env]") and default_api_key) else user_value
+        api_key = os.environ.get("FRED_API_KEY") or FRED_API_KEY
         if not api_key:
-            raise typer.BadParameter("FRED API key is required to fetch the curve.")
-        if default_api_key and api_key == default_api_key:
-            console.print("[green]Using key from FRED_API_KEY environment variable.[/green]")
+            raise typer.BadParameter(
+                "FRED API key is required to fetch the curve (set FRED_API_KEY env var or update src/config.py)."
+            )
+        console.print("[green]Using stored FRED API key.[/green]")
         interpolation_method = (
             typer.prompt("Interpolation method (linear/log-linear/cubic)", default="linear")
             .strip()
