@@ -103,8 +103,8 @@ class YieldCurve:
     def apply_parallel_shock(self, shock_bps: float) -> "YieldCurve":
         """Return a new yield curve with a parallel shock applied (in basis points)."""
         shock_decimal = float(shock_bps) / 10000.0
-        shocked_rates = np.maximum(self._rate_array + shock_decimal, 0.0)
-        return YieldCurve(self.tenors, shocked_rates, self.interpolation_method, metadata=dict(self.metadata))
+        shocked_rates = np.maximum(self._rate_array + shock_decimal, 0.0).tolist()
+        return YieldCurve(list(self.tenors), shocked_rates, self.interpolation_method, metadata=dict(self.metadata))
 
     def apply_non_parallel_shock(self, shocks_by_tenor: Dict[int, float]) -> "YieldCurve":
         """Return a new yield curve with tenor-specific shocks applied (in basis points)."""
@@ -112,7 +112,7 @@ class YieldCurve:
         for tenor, rate in zip(self.tenors, self.rates):
             shock = float(shocks_by_tenor.get(int(tenor), 0.0)) / 10000.0
             shocked_rates.append(max(rate + shock, 0.0))
-        return YieldCurve(self.tenors, shocked_rates, self.interpolation_method, metadata=dict(self.metadata))
+        return YieldCurve(list(self.tenors), shocked_rates, self.interpolation_method, metadata=dict(self.metadata))
 
     def to_dict(self) -> Dict[str, object]:
         """Export curve configuration as a serialisable dictionary."""
