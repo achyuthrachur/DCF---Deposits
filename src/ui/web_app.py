@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
-import streamlit as st\n\nfrom src.config import FRED_API_KEY
+import streamlit as st
+
+from src.config import FRED_API_KEY
 
 st.cache_data.clear()
 st.cache_resource.clear()
