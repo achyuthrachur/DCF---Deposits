@@ -459,6 +459,7 @@ class ALMEngine:
         projector: CashflowProjector,
         settings: ProjectionSettings,
         *,
+        pv_calculator: Optional[PresentValueCalculator] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         step_offset: int = 0,
         total_steps: int = 1,

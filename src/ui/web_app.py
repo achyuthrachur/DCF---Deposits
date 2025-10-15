@@ -350,6 +350,7 @@ def _collect_scenarios(
                 f"Current curve anchors: 3M = {short_anchor * 100:.2f}%, 10Y = {long_anchor * 100:.2f}%."
             )
 
+            st.caption("Level 1 keeps today's discount curve fixed; Level 2 simulates both the 3M and 10Y anchors so the curve itself can evolve.")
             level_choice = st.radio(
                 "Implementation level",
                 options=[
@@ -379,7 +380,7 @@ def _collect_scenarios(
             short_col = st.columns(3)
             with short_col[0]:
                 short_a = st.number_input(
-                    "Short mean reversion speed (a)",
+                    "Short mean reversion (a)",
                     min_value=0.0,
                     max_value=1.0,
                     value=0.15,
@@ -388,7 +389,7 @@ def _collect_scenarios(
                 )
             with short_col[1]:
                 short_b = st.number_input(
-                    "Short long-run anchor b (3M target)",
+                    "Short anchor (b)",
                     min_value=0.0,
                     max_value=0.20,
                     value=float(short_anchor),
@@ -418,7 +419,7 @@ def _collect_scenarios(
                 long_col = st.columns(3)
                 with long_col[0]:
                     long_a = st.number_input(
-                        "Long mean reversion speed (a)",
+                        "Long mean reversion (a)",
                         min_value=0.0,
                         max_value=1.0,
                         value=0.07,
@@ -427,7 +428,7 @@ def _collect_scenarios(
                     )
                 with long_col[1]:
                     long_b = st.number_input(
-                        "Long long-run anchor b (10Y target)",
+                        "Long anchor (b)",
                         min_value=0.0,
                         max_value=0.20,
                         value=float(long_anchor),
@@ -1244,4 +1245,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
