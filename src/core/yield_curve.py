@@ -41,6 +41,9 @@ class YieldCurve:
         self._rate_array = rates_arr
         self.tenors = tuple(float(t) for t in tenors_arr.tolist())
         self.rates = tuple(float(r) for r in rates_arr.tolist())
+        self.annual_rates: Dict[int, float] = {
+            int(t): float(r) for t, r in zip(self.tenors, self.rates)
+        }
         self.interpolation_method = self.interpolation_method.lower().strip() or "linear"
 
         if self.interpolation_method not in {"linear", "log-linear", "cubic"}:
