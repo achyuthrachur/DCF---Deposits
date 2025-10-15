@@ -18,6 +18,9 @@ class DiscountCurve(YieldCurve):
         interpolation_method: str = "linear",
     ) -> None:
         super().__init__(tenors, rates, interpolation_method)
+        self.annual_rates: Dict[int, float] = {
+            int(t): float(r) for t, r in zip(self.tenors, self.rates)
+        }
 
     @classmethod
     def from_single_rate(cls, rate: float, *, tenor_months: int = 360) -> "DiscountCurve":
@@ -60,6 +63,10 @@ class DiscountCurve(YieldCurve):
         """Yield discount factors for the requested months (compat shim)."""
         for month in months:
             yield int(month), float(self.get_discount_factor(month))
+
+    def to_dict(self) -> Dict[int, float]:
+        """Return tenor-rate mapping (compat shim)."""
+        return dict(self.annual_rates)
 
 
 __all__ = ["DiscountCurve"]
