@@ -871,6 +871,12 @@ def main() -> None:
             height: auto;
             filter: drop-shadow(0 4px 10px rgba(0,0,0,0.35));
         }
+        .brand-badge svg {
+            width: 160px;
+            height: auto;
+            display: block;
+            filter: drop-shadow(0 6px 12px rgba(0,0,0,0.35));
+        }
         .hero-card {
             background: rgba(19, 63, 127, 0.70);
             border: 1px solid rgba(255, 194, 61, 0.5);
@@ -1007,6 +1013,22 @@ def main() -> None:
         .stApp .stDownloadButton > button:hover {
             background: linear-gradient(135deg, #ffd66b, #ffb400);
             color: #04122a !important;
+        }
+        .stFileUploader label,
+        .stFileUploader label span,
+        .stFileUploader div[data-testid="stMarkdownContainer"] p,
+        .stFileUploader div[data-testid=\"stFileUploaderDropzone\"] div {
+            color: #fdfdfd !important;
+            font-weight: 600;
+        }
+        .stFileUploader div[data-testid=\"stFileUploaderDropzone\"] {
+            background: rgba(255,255,255,0.15) !important;
+            border: 1px dashed rgba(255,255,255,0.55) !important;
+        }
+        .stFileUploader [data-testid="stUploadedFileName"],
+        .stFileUploader [data-testid="stUploadedFileSize"] {
+            color: #fdfdfd !important;
+            font-weight: 600;
         }
         .stDataFrame, .stTable {
             background: rgba(255, 255, 255, 0.95) !important;
