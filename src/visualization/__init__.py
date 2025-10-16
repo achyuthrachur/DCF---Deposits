@@ -53,6 +53,7 @@ except Exception as exc:  # pragma: no cover - graceful degradation
     plot_shock_magnitude = _missing("plot_shock_magnitude", exc)  # type: ignore[assignment]
     plot_shock_tenor_comparison = _missing("plot_shock_tenor_comparison", exc)  # type: ignore[assignment]
     plot_shock_pv_delta = _missing("plot_shock_pv_delta", exc)  # type: ignore[assignment]
+    plot_shock_group_summary = _missing("plot_shock_group_summary", exc)  # type: ignore[assignment]
 else:
     __all__.extend(
         [
