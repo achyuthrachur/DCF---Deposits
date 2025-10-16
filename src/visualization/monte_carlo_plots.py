@@ -38,11 +38,15 @@ def extract_monte_carlo_data(
 
     rate_sample = tables.get("rate_paths_sample")
     rate_summary = tables.get("rate_paths_summary")
-    pv_distribution = tables.get("monte_carlo_distribution") or tables.get("simulation_pv")
+    pv_distribution = tables.get("monte_carlo_distribution")
+    if pv_distribution is None:
+        pv_distribution = tables.get("simulation_pv")
     if pv_distribution is None:
         return None
 
-    percentiles_table = tables.get("monte_carlo_percentiles") or tables.get("percentiles_table")
+    percentiles_table = tables.get("monte_carlo_percentiles")
+    if percentiles_table is None:
+        percentiles_table = tables.get("percentiles_table")
 
     base_case_pv = None
     if results.base_scenario_id and results.base_scenario_id in results.scenario_results:
