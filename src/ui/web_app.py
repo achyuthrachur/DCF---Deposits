@@ -89,6 +89,18 @@ DEFAULT_ASSUMPTIONS = {
     },
 }
 
+DEFAULT_SINGLE_RATE = 0.035
+DEFAULT_MANUAL_TENOR_RATES: Dict[int, float] = {
+    3: 0.0300,
+    6: 0.0310,
+    12: 0.0325,
+    24: 0.0335,
+    36: 0.0350,
+    60: 0.0365,
+    84: 0.0380,
+    120: 0.0400,
+}
+
 SCENARIO_OPTIONS = [
     ("parallel_100", "+100 bps parallel shock", True),
     ("parallel_200", "+200 bps parallel shock", True),
@@ -102,6 +114,18 @@ SCENARIO_OPTIONS = [
     ("flattener", "Curve flattener (short up, long down)", False),
     ("short_shock_up", "Short-rate shock up (+200 bps front-end)", False),
 ]
+DEFAULT_SINGLE_RATE = 0.035
+DEFAULT_MANUAL_TENOR_RATES: Dict[int, float] = {
+    3: 0.0300,
+    6: 0.0310,
+    12: 0.0325,
+    24: 0.0335,
+    36: 0.0350,
+    60: 0.0365,
+    84: 0.0380,
+    120: 0.0400,
+}
+
 
 TENOR_LABELS: List[Tuple[int, str]] = [
     (3, "3 Months"),
@@ -529,6 +553,87 @@ def _load_uploaded_file(uploaded_file: "st.runtime.uploaded_file_manager.Uploade
     return pd.read_csv(uploaded_file)
 
 
+def _find_rate_outliers(curve: Optional[YieldCurve]) -> Tuple[List[int], List[int]]:
+    """Return lists of tenor months with negative or >20% annual rates."""
+    if curve is None:
+        return [], []
+    tenors = [int(float(t)) for t in curve.tenors]
+    rates = list(curve.rates)
+    negative = []
+    excessive = []
+    for tenor, rate in zip(tenors, rates):
+        if rate < -1e-9:
+            negative.append(tenor)
+        elif rate > 0.20 + 1e-9:
+            excessive.append(tenor)
+    return negative, excessive
+
+
+def _reset_discount_defaults(discount_method: str) -> None:
+    """Restore discount inputs to a safe default configuration and rerun."""
+    if discount_method == "Single rate":
+        st.session_state["discount_method_choice"] = "Single rate"
+        st.session_state["single_rate_input"] = DEFAULT_SINGLE_RATE
+    elif discount_method == "Manual yield curve":
+        st.session_state["discount_method_choice"] = "Manual yield curve"
+        for tenor, rate in DEFAULT_MANUAL_TENOR_RATES.items():
+            st.session_state[f"tenor_{tenor}"] = f"{rate:.4f}"
+    else:
+        st.session_state["discount_method_choice"] = "Single rate"
+        st.session_state["single_rate_input"] = DEFAULT_SINGLE_RATE
+    st.session_state.pop("run_results", None)
+    st.experimental_rerun()
+
+
+def _render_rate_adjustment_controls(discount_method: str) -> None:
+    """Offer controls to reset discount curve inputs after invalid rates."""
+    if discount_method == "Single rate":
+        if st.button("Reset to a 3.5% flat discount curve", key="reset_single_curve"):
+            _reset_discount_defaults("Single rate")
+    elif discount_method == "Manual yield curve":
+        if st.button(
+            "Reset manual curve to default tenor rates",
+            key="reset_manual_curve",
+        ):
+            _reset_discount_defaults("Manual yield curve")
+    else:
+        if st.button(
+            "Switch to default 3.5% flat curve",
+            key="reset_other_curve",
+        ):
+            _reset_discount_defaults("Single rate")
+
+
+def _render_invalid_rate_message(discount_method: str, details: str) -> None:
+    detail_text = details.rstrip(".")
+    st.error(
+        "The selected parameters produced discount rates outside the supported "
+        "range (0%–20%). "
+        f"{detail_text}. "
+        "Please adjust the curve inputs or reset them to the defaults below."
+    )
+    _render_rate_adjustment_controls(discount_method)
+
+
+def _handle_rate_outliers(curve: Optional[YieldCurve], discount_method: str) -> bool:
+    """Display a friendly message if the chosen curve falls outside bounds."""
+    negative, excessive = _find_rate_outliers(curve)
+    if not negative and not excessive:
+        return False
+    fragments: List[str] = []
+    if negative:
+        fragments.append(
+            f"Negative rates detected at months {', '.join(str(t) for t in negative)}"
+        )
+    if excessive:
+        fragments.append(
+            f"Rates above 20% detected at months {', '.join(str(t) for t in excessive)}"
+        )
+    details = "; ".join(fragments)
+    _render_invalid_rate_message(discount_method, details)
+    return True
+
+
 def _scenario_display_name(results, scenario_id: str) -> str:
     scenario = results.scenario_results.get(scenario_id)
     if scenario is None:
@@ -908,6 +1013,23 @@ def main() -> None:
             border-radius: 12px;
             padding: 10px;
         }
+        div[data-testid="stMetricLabel"] {
+            color: #f8fbff !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stMetricValue"] {
+            color: #fdfdfd !important;
+            font-weight: 700 !important;
+            text-shadow: 0 0 6px rgba(15, 45, 99, 0.45);
+        }
+        div[data-testid="stMetricDelta"] {
+            color: #9ef7c9 !important;
+            font-weight: 600 !important;
+            text-shadow: 0 0 4px rgba(0, 0, 0, 0.25);
+        }
+        div[data-testid="stMetricDelta"] svg {
+            fill: currentColor !important;
+        }
         .footer-credit {
             position: fixed;
             bottom: 24px;
@@ -1144,18 +1266,21 @@ def main() -> None:
         options=["Single rate", "Fetch from FRED", "Manual yield curve"],
         index=1,
         horizontal=True,
+        key="discount_method_choice",
     )
 
     discount_config: Dict[str, object]
     selected_curve: Optional[YieldCurve] = st.session_state.get("selected_discount_curve")
     selected_interpolation = st.session_state.get("discount_interpolation_method", "linear")
     if discount_method == "Single rate":
+        default_single_rate = st.session_state.get("single_rate_input", DEFAULT_SINGLE_RATE)
         discount_rate_input = st.number_input(
             "Discount rate (annual decimal, e.g., 0.035 for 3.5%)",
             min_value=0.0,
             max_value=0.20,
-            value=0.035,
+            value=default_single_rate,
             step=0.005,
+            key="single_rate_input",
         )
         discount_config = {"mode": "single", "rate": discount_rate_input, "interpolation": "linear"}
         flat_tenors = [3, 6, 12, 24, 36, 60, 84, 120]
@@ -1242,7 +1367,7 @@ def main() -> None:
         columns = st.columns(2)
         for idx, (tenor, label) in enumerate(TENOR_LABELS):
             with columns[idx % 2]:
-                value = st.text_input(label, value="", key=f"tenor_{tenor}")
+                value = st.text_input(label, key=f"tenor_{tenor}")
             if value.strip():
                 try:
                     tenor_values[tenor] = _decimalize(float(value.strip()))
@@ -1285,6 +1410,10 @@ def main() -> None:
             "No yield curve selected yet  using a flat 3% base market path until a curve is configured."
         )
     st.session_state["base_market_path"] = base_market_path
+
+    if _handle_rate_outliers(selected_curve, discount_method):
+        st.session_state.pop("run_results", None)
+        return
 
     scenario_flags, monte_carlo_config = _collect_scenarios(
         int(projection_months),
@@ -1362,6 +1491,15 @@ def main() -> None:
                     projection_months=int(projection_months),
                     progress_callback=progress_callback,
                 )
+        except ValueError as exc:
+            message = str(exc)
+            if "Invalid rate(s) detected" in message:
+                details = message.replace("Invalid rate(s) detected for ", "Affected tenors: ")
+                _render_invalid_rate_message(discount_method, details)
+            else:
+                st.error(f"Unexpected numeric error: {exc}")
+            st.session_state.pop("run_results", None)
+            return
         except ValidationError as exc:
             st.error(f"Validation error during execution: {exc}")
             return
