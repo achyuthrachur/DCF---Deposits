@@ -134,14 +134,37 @@ def plot_rate_path_spaghetti(
     if rate_summary is None:
         raise ValueError("Rate summary data is required")
 
-    months = np.arange(1, rate_summary.shape[0] + 1)
+    if "month" in rate_summary.columns:
+        months = rate_summary["month"].to_numpy()
+    else:
+        months = np.arange(1, rate_summary.shape[0] + 1)
     fig, ax = _setup_figure(figsize=(12, 7))
 
     # Convert sample to numpy for plotting
-    if rate_sample is not None:
-        sample_paths = rate_sample.drop(columns="simulation").to_numpy()
-        for path in sample_paths:
-            ax.plot(months, path * 100, color="steelblue", alpha=0.08, linewidth=0.6)
+    if rate_sample is not None and not rate_sample.empty:
+        if {"simulation", "month", "short_rate"}.issubset(rate_sample.columns):
+            short_matrix = (
+                rate_sample.pivot(index="simulation", columns="month", values="short_rate")
+                .reindex(columns=months, axis=1)
+                .sort_index()
+            )
+            for _, path in short_matrix.iterrows():
+                values = path.to_numpy(dtype=float)
+                valid = ~np.isnan(values)
+                if np.any(valid):
+                    ax.plot(
+                        months[valid],
+                        values[valid] * 100,
+                        color="steelblue",
+                        alpha=0.08,
+                        linewidth=0.6,
+                    )
+        else:
+            sample_paths = rate_sample.to_numpy()
+            for path in sample_paths:
+                if path.shape[0] != months.shape[0]:
+                    continue
+                ax.plot(months, path * 100, color="steelblue", alpha=0.08, linewidth=0.6)
 
     ax.plot(months, rate_summary["mean"].to_numpy() * 100, color="navy", linewidth=2.5, label="Mean")
     ax.plot(months, rate_summary["p05"].to_numpy() * 100, color="darkred", linestyle="--", linewidth=1.5, label="5th Percentile")
