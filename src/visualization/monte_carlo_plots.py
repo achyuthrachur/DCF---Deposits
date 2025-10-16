@@ -145,7 +145,7 @@ def plot_rate_path_spaghetti(
         if {"simulation", "month", "short_rate"}.issubset(rate_sample.columns):
             short_matrix = (
                 rate_sample.pivot(index="simulation", columns="month", values="short_rate")
-                .reindex(columns=months, axis=1)
+                .reindex(columns=months)
                 .sort_index()
             )
             for _, path in short_matrix.iterrows():
