@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Unio
 import numpy as np
 import pandas as pd
 
+import logging
+
 from .core.cashflow_projector import CashflowProjector, ProjectionSettings
 from .core.data_loader import DataLoader, LoadResult
 from .core.discount import DiscountCurve
@@ -33,6 +35,8 @@ from .models.assumptions import AssumptionSet, SegmentAssumptions
 from .models.monte_carlo import MonteCarloProgressEvent
 from .models.results import EngineResults, ScenarioResult
 from .models.scenario import ScenarioDefinition, ScenarioSet, ScenarioType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -252,6 +256,73 @@ class ALMEngine:
             return tuple(self._market_rate_path) + tuple(extension)
         return self._market_rate_path
 
+    def _discount_curve_for_scenario(self, scenario: ScenarioDefinition) -> DiscountCurve:
+        """Return the discount curve appropriate for the provided scenario."""
+        base_curve = self.discount_curve()
+        if scenario.scenario_type == ScenarioType.BASE:
+            return base_curve
+        curve_to_use: Optional[DiscountCurve] = None
+
+        scenario_meta = scenario.metadata or {}
+        scenario_curve_dict = scenario_meta.get("scenario_curve")
+        if isinstance(scenario_curve_dict, dict):
+            tenors = scenario_curve_dict.get("tenors")
+            rates = scenario_curve_dict.get("rates")
+            if isinstance(tenors, (list, tuple)) and isinstance(rates, (list, tuple)):
+                if len(tenors) == len(rates):
+                    interpolation = str(
+                        scenario_curve_dict.get(
+                            "interpolation_method", base_curve.interpolation_method
+                        )
+                    )
+                    try:
+                        curve_to_use = DiscountCurve(
+                            [int(t) for t in tenors],
+                            [max(0.0, float(r)) for r in rates],
+                            interpolation_method=interpolation,
+                        )
+                    except Exception as exc:
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Scenario %s metadata curve construction failed: %s",
+                                scenario.scenario_id,
+                                exc,
+                            )
+
+        if curve_to_use is None:
+            shocked_rates: List[float] = []
+            shocked_tenors: List[int] = []
+            for tenor in base_curve.tenors:
+                tenor_months = int(float(tenor))
+                base_rate = float(base_curve.get_rate(tenor_months))
+                shocked_rate = max(
+                    0.0, base_rate + float(scenario.rate_adjustment(tenor_months))
+                )
+                shocked_tenors.append(tenor_months)
+                shocked_rates.append(shocked_rate)
+            curve_to_use = DiscountCurve(
+                shocked_tenors,
+                shocked_rates,
+                interpolation_method=base_curve.interpolation_method,
+            )
+
+        if logger.isEnabledFor(logging.DEBUG):
+            sample_tenors = [3, 12, 60, 120]
+            sample_info = {
+                tenor: {
+                    "base": float(base_curve.get_rate(tenor)),
+                    "scenario": float(curve_to_use.get_rate(tenor)),
+                }
+                for tenor in sample_tenors
+            }
+            logger.debug(
+                "Scenario %s discount sample (base vs shocked): %s",
+                scenario.scenario_id,
+                sample_info,
+            )
+        shocked_rates: List[float] = []
+        return curve_to_use
+
     # ---------------------------------------------------------------- Scenarios
     def configure_standard_scenarios(self, selections: Dict[str, bool]) -> None:
         """Configure the scenario set using standard selections."""
@@ -304,8 +375,7 @@ class ALMEngine:
             base_market_rates=self.market_rate_path(),
         )
         projector = CashflowProjector(self._assumptions)
-        discount_curve = self.discount_curve()
-        pv_calculator = PresentValueCalculator(discount_curve)
+        base_discount_curve = self.discount_curve()
 
         scenario_plan = self.scenario_set().scenarios
         total_accounts = max(len(self.accounts), 1)
@@ -336,6 +406,8 @@ class ALMEngine:
                 except Exception:  # pragma: no cover - guard rail
                     pass
 
+        base_portfolio_pv: Optional[float] = None
+        base_cashflow_summary: Optional[pd.Series] = None
         results = EngineResults(base_scenario_id="base")
         emit_progress(0, "Initializing scenario projections...")
 
@@ -436,10 +508,56 @@ class ALMEngine:
                     settings,
                     account_progress=account_progress,
                 )
-                account_pv = pv_calculator.account_level_pv(cashflows)
-                portfolio_pv = pv_calculator.portfolio_pv(cashflows)
+                if scenario.scenario_type == ScenarioType.BASE:
+                    base_cashflow_summary = cashflows.groupby("month")["total_cash_flow"].sum()
+                elif base_cashflow_summary is not None and logger.isEnabledFor(logging.DEBUG):
+                    scenario_flow_summary = cashflows.groupby("month")["total_cash_flow"].sum()
+                    if not scenario_flow_summary.empty:
+                        sample_month_cf = int(min(60, scenario_flow_summary.index.max()))
+                        base_cf = float(
+                            base_cashflow_summary.get(sample_month_cf, float("nan"))
+                        )
+                        scenario_cf = float(
+                            scenario_flow_summary.get(sample_month_cf, float("nan"))
+                        )
+                        logger.debug(
+                            "Scenario %s cash flow sample (month %s): base=%s scenario=%s",
+                            scenario.scenario_id,
+                            sample_month_cf,
+                            base_cf,
+                            scenario_cf,
+                        )
+                scenario_discount_curve = self._discount_curve_for_scenario(scenario)
+                scenario_pv_calculator = PresentValueCalculator(scenario_discount_curve)
+                if logger.isEnabledFor(logging.DEBUG):
+                    sample_month = min(60, self.projection_months)
+                    base_rate_sample = float(base_discount_curve.get_rate(sample_month))
+                    shocked_rate_sample = float(scenario_discount_curve.get_rate(sample_month))
+                    base_df_sample = float(base_discount_curve.get_discount_factor(sample_month))
+                    shocked_df_sample = float(scenario_discount_curve.get_discount_factor(sample_month))
+                    logger.debug(
+                        "Scenario %s month %s rate/df sample: base_rate=%.6f shocked_rate=%.6f base_df=%.6f shocked_df=%.6f",
+                        scenario.scenario_id,
+                        sample_month,
+                        base_rate_sample,
+                        shocked_rate_sample,
+                        base_df_sample,
+                        shocked_df_sample,
+                    )
+                account_pv = scenario_pv_calculator.account_level_pv(cashflows)
+                portfolio_pv = scenario_pv_calculator.portfolio_pv(cashflows)
+                if scenario.scenario_type == ScenarioType.BASE:
+                    base_portfolio_pv = portfolio_pv
+                elif base_portfolio_pv is not None and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Scenario %s PV summary: base=%.6f shocked=%.6f delta=%.6f",
+                        scenario.scenario_id,
+                        base_portfolio_pv,
+                        portfolio_pv,
+                        portfolio_pv - base_portfolio_pv,
+                    )
                 months_range = np.arange(1, self.projection_months + 1)
-                base_curve = self.discount_curve()
+                base_curve = base_discount_curve
                 base_rates = np.array(
                     [float(base_curve.get_rate(month)) for month in months_range],
                     dtype=float,

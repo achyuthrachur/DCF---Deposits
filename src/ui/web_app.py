@@ -1363,6 +1363,8 @@ def main() -> None:
         }
     else:
         st.write("Enter annualised rates for each tenor (leave blank to omit).")
+        for tenor, default_rate in DEFAULT_MANUAL_TENOR_RATES.items():
+            st.session_state.setdefault(f"tenor_{tenor}", f"{default_rate:.4f}")
         tenor_values: Dict[int, float] = {}
         columns = st.columns(2)
         for idx, (tenor, label) in enumerate(TENOR_LABELS):
