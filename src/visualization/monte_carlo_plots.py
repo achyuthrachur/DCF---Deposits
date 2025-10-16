@@ -38,6 +38,8 @@ def extract_monte_carlo_data(
 
     rate_sample = tables.get("rate_paths_sample")
     rate_summary = tables.get("rate_paths_summary")
+    if rate_summary is None or rate_summary.empty:
+        return None
     pv_distribution = tables.get("monte_carlo_distribution")
     if pv_distribution is None:
         pv_distribution = tables.get("simulation_pv")
@@ -56,14 +58,41 @@ def extract_monte_carlo_data(
     percentiles = metadata.get("pv_percentiles", {})
     if not percentiles and percentiles_table is not None:
         try:
-            percentiles = dict(
-                zip(
-                    percentiles_table["percentile"].astype(int),
-                    percentiles_table["portfolio_pv"].astype(float),
-                )
-            )
+            percentiles = {
+                f"p{int(row.percentile)}": float(row.portfolio_pv)
+                for row in percentiles_table.itertuples(index=False)
+            }
         except Exception:  # pragma: no cover - fallback only
             percentiles = {}
+
+    summary_stats = metadata.get("summary", {}) or {}
+    if summary_stats:
+        enriched = percentiles.copy()
+        for key in ("mean", "median", "std", "skew", "kurtosis", "var_95", "cvar_95"):
+            value = summary_stats.get(key)
+            if value is not None:
+                enriched[key] = value
+        percentiles = enriched
+
+    value_column = next(
+        (
+            candidate
+            for candidate in ("portfolio_pv", "present_value", "pv", "value")
+            if candidate in pv_distribution.columns
+        ),
+        None,
+    )
+    if value_column is not None:
+        numeric_values = (
+            pd.to_numeric(pv_distribution[value_column], errors="coerce")
+            .dropna()
+        )
+        if not numeric_values.empty:
+            percentiles = {
+                **percentiles,
+                "min": float(numeric_values.min()),
+                "max": float(numeric_values.max()),
+            }
 
     book_value = metadata.get("book_value")
     if book_value is None and results.validation_summary:
@@ -77,6 +106,7 @@ def extract_monte_carlo_data(
         "base_case_pv": base_case_pv,
         "book_value": book_value,
         "percentiles_table": percentiles_table,
+        "summary": summary_stats,
     }
 
 
@@ -123,8 +153,47 @@ def _format_currency_axis(ax, values: Iterable[float], axis: str = "x") -> None:
             ax.spines[spine].set_visible(False)
 
 
+def _extract_short_rate_paths(
+    rate_sample: Optional[pd.DataFrame], months: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return matrix of short-rate paths aligned to provided months."""
+    n_months = len(months)
+    if rate_sample is None or rate_sample.empty:
+        return np.empty((0, n_months)), np.array([], dtype=int)
+
+    # Preferred: long-form table with simulation/month columns.
+    required_columns = {"simulation", "month", "short_rate"}
+    if required_columns.issubset(rate_sample.columns):
+        pivot = (
+            rate_sample.pivot(index="simulation", columns="month", values="short_rate")
+            .reindex(columns=months, fill_value=np.nan)
+            .sort_index()
+        )
+        return pivot.to_numpy(dtype=float), pivot.index.to_numpy()
+
+    # Fallback: assume one row per simulation with months already across columns.
+    data = rate_sample.copy()
+    if "simulation" in data.columns:
+        labels = data["simulation"].to_numpy()
+        data = data.drop(columns="simulation")
+    else:
+        labels = np.arange(1, len(data) + 1)
+
+    arr = np.asarray(data, dtype=float)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+
+    if arr.shape[1] < n_months:
+        padding = np.full((arr.shape[0], n_months - arr.shape[1]), np.nan)
+        arr = np.hstack([arr, padding])
+    elif arr.shape[1] > n_months:
+        arr = arr[:, :n_months]
+
+    return arr, np.asarray(labels)
+
+
 def plot_rate_path_spaghetti(
-    rate_sample: pd.DataFrame,
+    rate_sample: Optional[pd.DataFrame],
     rate_summary: pd.DataFrame,
     *,
     title: str = "Monte Carlo Interest Rate Paths",
@@ -140,31 +209,17 @@ def plot_rate_path_spaghetti(
         months = np.arange(1, rate_summary.shape[0] + 1)
     fig, ax = _setup_figure(figsize=(12, 7))
 
-    # Convert sample to numpy for plotting
-    if rate_sample is not None and not rate_sample.empty:
-        if {"simulation", "month", "short_rate"}.issubset(rate_sample.columns):
-            short_matrix = (
-                rate_sample.pivot(index="simulation", columns="month", values="short_rate")
-                .reindex(columns=months)
-                .sort_index()
+    sample_paths, _ = _extract_short_rate_paths(rate_sample, months)
+    for path in sample_paths:
+        valid = ~np.isnan(path)
+        if np.any(valid):
+            ax.plot(
+                months[valid],
+                path[valid] * 100,
+                color="steelblue",
+                alpha=0.08,
+                linewidth=0.6,
             )
-            for _, path in short_matrix.iterrows():
-                values = path.to_numpy(dtype=float)
-                valid = ~np.isnan(values)
-                if np.any(valid):
-                    ax.plot(
-                        months[valid],
-                        values[valid] * 100,
-                        color="steelblue",
-                        alpha=0.08,
-                        linewidth=0.6,
-                    )
-        else:
-            sample_paths = rate_sample.to_numpy()
-            for path in sample_paths:
-                if path.shape[0] != months.shape[0]:
-                    continue
-                ax.plot(months, path * 100, color="steelblue", alpha=0.08, linewidth=0.6)
 
     ax.plot(months, rate_summary["mean"].to_numpy() * 100, color="navy", linewidth=2.5, label="Mean")
     ax.plot(months, rate_summary["p05"].to_numpy() * 100, color="darkred", linestyle="--", linewidth=1.5, label="5th Percentile")
@@ -244,7 +299,21 @@ def plot_portfolio_pv_distribution(
     if pv_distribution is None or pv_distribution.empty:
         raise ValueError("PV distribution data is required")
 
-    values = pv_distribution["present_value"].to_numpy()
+    value_column = next(
+        (
+            candidate
+            for candidate in ("portfolio_pv", "present_value", "pv", "value")
+            if candidate in pv_distribution.columns
+        ),
+        None,
+    )
+    if value_column is None:
+        raise ValueError("PV distribution table missing portfolio PV column")
+
+    values = pd.to_numeric(pv_distribution[value_column], errors="coerce").to_numpy()
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        raise ValueError("PV distribution does not contain finite values")
     fig, ax = _setup_figure(figsize=(12, 6))
     counts, bins, patches = ax.hist(values, bins=60, color="#4f81bd", alpha=0.75, edgecolor="black")
 
@@ -366,10 +435,21 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
 
     # Top-left: Spaghetti plot
     ax1 = fig.add_subplot(gs[0, :2])
-    months = np.arange(1, rate_summary.shape[0] + 1)
-    if rate_sample is not None:
-        for path in rate_sample.drop(columns="simulation").to_numpy():
-            ax1.plot(months, path * 100, color="steelblue", alpha=0.05, linewidth=0.6)
+    if "month" in rate_summary.columns:
+        months = rate_summary["month"].to_numpy()
+    else:
+        months = np.arange(1, rate_summary.shape[0] + 1)
+    sample_paths, _ = _extract_short_rate_paths(rate_sample, months)
+    for path in sample_paths:
+        valid = ~np.isnan(path)
+        if np.any(valid):
+            ax1.plot(
+                months[valid],
+                path[valid] * 100,
+                color="steelblue",
+                alpha=0.05,
+                linewidth=0.6,
+            )
     ax1.plot(months, rate_summary["mean"].to_numpy() * 100, color="navy", linewidth=2.5, label="Mean path")
     ax1.fill_between(
         months,
@@ -402,7 +482,21 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
 
     # Middle row: PV distribution
     ax3 = fig.add_subplot(gs[1, :2])
-    values = pv_distribution["present_value"].to_numpy()
+    value_column = next(
+        (
+            candidate
+            for candidate in ("portfolio_pv", "present_value", "pv", "value")
+            if candidate in pv_distribution.columns
+        ),
+        None,
+    )
+    if value_column is None:
+        raise ValueError("PV distribution table missing portfolio PV column")
+    values = (
+        pd.to_numeric(pv_distribution[value_column], errors="coerce")
+        .dropna()
+        .to_numpy()
+    )
     ax3.hist(values, bins=60, color="#4f81bd", alpha=0.75, edgecolor="black")
     if book_value is not None:
         ax3.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
@@ -574,21 +668,19 @@ def create_rate_path_animation(
     base_path = rate_summary["base_rate"].to_numpy() * 100
     p5 = rate_summary["p05"].to_numpy() * 100
     p95 = rate_summary["p95"].to_numpy() * 100
-    sample_paths = np.empty((0, len(months)))
-    sample_labels = np.array([])
+    sample_paths, sample_labels = _extract_short_rate_paths(rate_sample, months)
+    sample_paths = sample_paths * 100
     sample_colors: list[str] = []
-    if rate_sample is not None and not rate_sample.empty:
-        path_matrix = rate_sample.drop(columns="simulation").to_numpy(dtype=float) * 100
-        sample_labels = rate_sample["simulation"].to_numpy()
-        max_paths = min(path_matrix.shape[0], 150)
-        path_matrix = path_matrix[:max_paths]
+    if sample_paths.size:
+        max_paths = min(sample_paths.shape[0], 150)
+        sample_paths = sample_paths[:max_paths]
         sample_labels = sample_labels[:max_paths]
-        order = np.argsort(path_matrix[:, -1])
-        sample_paths = path_matrix[order]
+        sort_key = np.nan_to_num(sample_paths[:, -1], nan=-np.inf)
+        order = np.argsort(sort_key)
+        sample_paths = sample_paths[order]
         sample_labels = sample_labels[order]
-        if len(sample_paths):
-            color_positions = np.linspace(0.25, 0.85, len(sample_paths)).tolist()
-            sample_colors = sample_colorscale("Blues", color_positions)
+        color_positions = np.linspace(0.25, 0.85, sample_paths.shape[0]).tolist()
+        sample_colors = list(sample_colorscale("Blues", color_positions))
 
     fig = go.Figure()
 
