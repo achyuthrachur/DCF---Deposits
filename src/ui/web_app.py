@@ -29,7 +29,6 @@ from src.engine import ALMEngine
 from src.core.fred_loader import FREDYieldCurveLoader
 from src.core.yield_curve import YieldCurve
 from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
-from src.reporting import ReportGenerator
 from src.visualization import (
     create_monte_carlo_dashboard,
     create_rate_path_animation,
@@ -41,6 +40,7 @@ from src.visualization import (
     plot_rate_path_spaghetti,
     plot_shock_magnitude,
     plot_shock_pv_delta,
+    plot_shock_group_summary,
     plot_shock_rate_paths,
     plot_shock_tenor_comparison,
 )
@@ -111,7 +111,6 @@ TENOR_LABELS: List[Tuple[int, str]] = [
     (120, "10 Years"),
 ]
 
-CASHFLOW_SAMPLE_SIZE = 20
 
 
 def _reset_state_on_upload() -> None:
@@ -519,25 +518,222 @@ def _collect_scenarios(
 
     return scenario_flags, monte_carlo_config
 
-
-
-def _download_button(label: str, dataframe: pd.DataFrame, filename: str) -> None:
-    """Render a reusable download button for CSV exports."""
-    csv_bytes = dataframe.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label,
-        data=csv_bytes,
-        file_name=filename,
-        mime="text/csv",
-    )
-
-
 def _load_uploaded_file(uploaded_file: "st.runtime.uploaded_file_manager.UploadedFile") -> pd.DataFrame:
     """Read uploaded CSV or Excel file into a dataframe."""
     suffix = Path(uploaded_file.name).suffix.lower()
     if suffix in {".xlsx", ".xls"}:
         return pd.read_excel(uploaded_file)
     return pd.read_csv(uploaded_file)
+
+
+def _scenario_display_name(results, scenario_id: str) -> str:
+    scenario = results.scenario_results.get(scenario_id)
+    if scenario is None:
+        return scenario_id
+    metadata = scenario.metadata or {}
+    label = metadata.get("description")
+    if label:
+        return label
+    return scenario_id.replace("_", " ").title()
+
+
+def _render_shock_detail(results, scenario_id: str) -> None:
+    shock_viz_data = extract_shock_data(results, scenario_id)
+    if not shock_viz_data:
+        st.info("Visualisations are unavailable for this scenario.")
+        return
+
+    metrics = st.columns(3)
+    metrics[0].metric("Scenario PV", f"${shock_viz_data['scenario_pv']:,.0f}")
+
+    delta = shock_viz_data.get("delta")
+    delta_pct = shock_viz_data.get("delta_pct")
+    if delta is not None:
+        pct_display = f"{delta_pct * 100:+.2f}%" if delta_pct is not None else ""
+        metrics[1].metric("Δ vs Base", f"${delta:,.0f}", pct_display)
+    else:
+        metrics[1].metric("Δ vs Base", "N/A")
+
+    metrics[2].metric(
+        "Max |Shock|",
+        f"{shock_viz_data['abs_max_bps']:,.0f} bps",
+        f"Avg {shock_viz_data['mean_bps']:.1f} bps",
+    )
+
+    col_left, col_right = st.columns(2)
+    with col_left:
+        fig = plot_shock_rate_paths(
+            shock_viz_data["curve_comparison"],
+            shock_viz_data["scenario_label"],
+        )
+        st.pyplot(fig)
+    with col_right:
+        fig = plot_shock_magnitude(
+            shock_viz_data["curve_comparison"],
+            shock_viz_data["scenario_label"],
+        )
+        st.pyplot(fig)
+
+    tenor_fig = plot_shock_tenor_comparison(
+        shock_viz_data["tenor_comparison"],
+        shock_viz_data["scenario_label"],
+    )
+    if tenor_fig:
+        st.pyplot(tenor_fig)
+
+    pv_fig = plot_shock_pv_delta(
+        base_pv=shock_viz_data["base_pv"],
+        scenario_pv=shock_viz_data["scenario_pv"],
+        scenario_label=shock_viz_data["scenario_label"],
+        delta=delta,
+        delta_pct=delta_pct,
+    )
+    if pv_fig:
+        st.pyplot(pv_fig)
+
+
+def _render_shock_group(
+    results,
+    scenario_ids: List[str],
+    *,
+    title: str,
+    select_label: str,
+    select_key: str,
+) -> None:
+    if not scenario_ids:
+        st.info("No scenarios are available in this category.")
+        return
+
+    ordered_ids = sorted(
+        scenario_ids,
+        key=lambda sid: _scenario_display_name(results, sid),
+    )
+
+    summary_fig = plot_shock_group_summary(
+        results,
+        ordered_ids,
+        title=title,
+    )
+    if summary_fig:
+        st.pyplot(summary_fig)
+
+    selected_id = st.selectbox(
+        select_label,
+        options=ordered_ids,
+        format_func=lambda sid: _scenario_display_name(results, sid),
+        key=select_key,
+    )
+    _render_shock_detail(results, selected_id)
+
+
+def _render_monte_carlo_detail(results, scenario_id: str) -> None:
+    scenario_result = results.scenario_results.get(scenario_id)
+    if scenario_result is None:
+        st.info("Scenario not found.")
+        return
+
+    viz_data = extract_monte_carlo_data(results, scenario_id=scenario_id)
+    if not viz_data:
+        st.info("Monte Carlo visualisations are unavailable.")
+        return
+
+    base_result = (
+        results.scenario_results.get(results.base_scenario_id)
+        if results.base_scenario_id
+        else None
+    )
+    base_pv = float(base_result.present_value) if base_result else None
+    scenario_pv = float(scenario_result.present_value)
+
+    metrics = st.columns(3)
+    metrics[0].metric("Scenario PV", f"${scenario_pv:,.0f}")
+
+    if base_pv is not None:
+        delta = scenario_pv - base_pv
+        pct = delta / base_pv if base_pv else None
+        pct_display = f"{pct * 100:+.2f}%" if pct is not None else ""
+        metrics[1].metric("Δ vs Base", f"${delta:,.0f}", pct_display)
+    else:
+        metrics[1].metric("Δ vs Base", "N/A")
+
+    percentiles = viz_data.get("percentiles", {})
+    if percentiles and percentiles.get("p5") is not None and percentiles.get("p95") is not None:
+        metrics[2].metric(
+            "Central 90% PV",
+            f"${percentiles['p5']:,.0f} – ${percentiles['p95']:,.0f}",
+        )
+    else:
+        metrics[2].metric("Central 90% PV", "N/A")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        fig = plot_rate_path_spaghetti(viz_data["rate_sample"], viz_data["rate_summary"])
+        st.pyplot(fig)
+    with col_b:
+        fig = plot_rate_confidence_fan(viz_data["rate_summary"])
+        st.pyplot(fig)
+
+    fig = plot_portfolio_pv_distribution(
+        viz_data["pv_distribution"],
+        book_value=viz_data.get("book_value"),
+        base_case_pv=viz_data.get("base_case_pv"),
+        percentiles=percentiles,
+    )
+    st.pyplot(fig)
+
+    fig = plot_percentile_ladder(
+        percentiles,
+        book_value=viz_data.get("book_value"),
+        base_case_pv=viz_data.get("base_case_pv"),
+    )
+    st.pyplot(fig)
+
+    dashboard = create_monte_carlo_dashboard(viz_data)
+    st.pyplot(dashboard)
+
+    try:
+        animation_fig = create_rate_path_animation(
+            viz_data["rate_sample"],
+            viz_data["rate_summary"],
+        )
+    except Exception as exc:
+        st.warning(
+            f"Monte Carlo animation unavailable: {exc}",
+            icon="⚠️",
+        )
+    else:
+        st.plotly_chart(
+            animation_fig,
+            use_container_width=True,
+            key=f"mc_animation_{scenario_id}",
+        )
+
+
+def _render_monte_carlo_group(results, scenario_ids: List[str]) -> None:
+    if not scenario_ids:
+        st.info("Monte Carlo simulations have not been configured.")
+        return
+
+    ordered_ids = sorted(
+        scenario_ids,
+        key=lambda sid: _scenario_display_name(results, sid),
+    )
+
+    summary_fig = plot_shock_group_summary(
+        results,
+        ordered_ids,
+        title="Monte Carlo Present Value Comparison",
+    )
+    if summary_fig:
+        st.pyplot(summary_fig)
+
+    selected_id = st.selectbox(
+        "Select Monte Carlo scenario",
+        options=ordered_ids,
+        format_func=lambda sid: _scenario_display_name(results, sid),
+        key="monte_carlo_select",
+    )
+    _render_monte_carlo_detail(results, selected_id)
 
 
 def main() -> None:
@@ -901,13 +1097,43 @@ def main() -> None:
 
     assumptions = _prepare_assumption_inputs(segments)
 
+    wal_lookup = {segment: values["wal_years"] for segment, values in assumptions.items()}
+    wal_summary = segment_summary.copy()
+    wal_summary["wal_years"] = wal_summary["segment"].map(wal_lookup)
+    wal_summary = wal_summary.dropna(subset=["wal_years"])
+    total_balance = float(wal_summary["balance"].abs().sum())
+    if total_balance > 0:
+        weighted_wal_years = float(
+            (wal_summary["balance"].abs() * wal_summary["wal_years"]).sum() / total_balance
+        )
+    elif wal_lookup:
+        weighted_wal_years = float(sum(wal_lookup.values()) / len(wal_lookup))
+    else:
+        weighted_wal_years = 0.0
+
+    max_projection_months_allowed = max(1, int(weighted_wal_years * 12))
+    if max_projection_months_allowed < 12:
+        st.error(
+            "Weighted average life across segments is "
+            f"{weighted_wal_years:.2f} years ({max_projection_months_allowed} months). "
+            "Increase the WAL assumptions to run at least a 12-month projection."
+        )
+        return
+
+    st.caption(
+        f"Portfolio weighted average life: {weighted_wal_years:.2f} years "
+        f"({max_projection_months_allowed} months). The projection horizon cannot exceed this value."
+    )
+    projection_months_cap = min(360, max_projection_months_allowed)
+    default_projection_months = min(120, projection_months_cap)
+
     st.markdown("### Step 3 - Projection Settings")
     projection_months = st.number_input(
         "Projection horizon (months)",
         min_value=12,
-        max_value=360,
+        max_value=projection_months_cap,
         step=12,
-        value=120,
+        value=default_projection_months,
     )
 
     discount_method = st.radio(
@@ -1141,10 +1367,10 @@ def main() -> None:
             return
 
         st.session_state["run_results"] = results
-        st.success("Analysis complete! Scroll down to review and download outputs.")
+        st.success("Analysis complete! Scroll down to explore the visualisations.")
 
         if progress_text and progress_bar:
-            progress_text.markdown("**Preparing summary metrics...**")
+            progress_text.markdown("**Preparing visualisations...**")
             progress_bar.progress(80)
     else:
         if results is None:
@@ -1152,179 +1378,65 @@ def main() -> None:
             return
         else:
             st.caption(
-                "Displaying previously generated results. Run the analysis again to refresh."
+                "Displaying previously generated visualisations. Run the analysis again to refresh."
             )
 
-    summary_df = results.summary_frame()
+    scenario_results = results.scenario_results
+    if not scenario_results:
+        st.info("No scenarios were produced for the selected configuration.")
+        return
 
-    st.markdown("### Scenario Present Value Summary")
-    st.dataframe(summary_df)
-    _download_button("Download summary CSV", summary_df, "eve_summary.csv")
+    parallel_ids: List[str] = []
+    curve_ids: List[str] = []
+    monte_carlo_ids: List[str] = []
+    for scenario_id, scenario_result in scenario_results.items():
+        method = (scenario_result.metadata or {}).get("method")
+        if method == "parallel":
+            parallel_ids.append(scenario_id)
+        elif method == "monte_carlo":
+            monte_carlo_ids.append(scenario_id)
+        elif method not in {"base", None}:
+            curve_ids.append(scenario_id)
 
-    scenario_ids = list(results.scenario_results.keys())
-    selected_scenario = st.selectbox(
-        "Select scenario for detailed cash flows",
-        options=scenario_ids,
+    st.markdown("### Visualisation Explorer")
+
+    group_options: List[str] = []
+    if parallel_ids:
+        group_options.append("Parallel Shocks")
+    if curve_ids:
+        group_options.append("Curve Shape Shocks")
+    if monte_carlo_ids:
+        group_options.append("Monte Carlo")
+
+    if not group_options:
+        st.info("No visualisations are available for the selected configuration.")
+        return
+
+    group_choice = st.radio(
+        "Select visualisation set",
+        group_options,
         index=0,
+        key="visualisation_set",
     )
-    scenario_result = results.scenario_results[selected_scenario]
-    scenario_method = scenario_result.metadata.get("method", "")
 
-    if scenario_method == "monte_carlo":
-        st.markdown(f"### Expected Cash Flow Detail ' {selected_scenario}")
-        st.dataframe(scenario_result.cashflows)
-        _download_button(
-            f"Download expected cashflows ({selected_scenario})",
-            scenario_result.cashflows,
-            f"cashflows_{selected_scenario}.csv",
+    if group_choice == "Parallel Shocks":
+        _render_shock_group(
+            results,
+            parallel_ids,
+            title="Parallel Shock Present Value Comparison",
+            select_label="Select parallel scenario",
+            select_key="parallel_shock_select",
         )
-
-        st.markdown("### PV Distribution Statistics")
-        st.dataframe(scenario_result.account_level_pv)
-        _download_button(
-            "Download PV statistics",
-            scenario_result.account_level_pv,
-            f"pv_stats_{selected_scenario}.csv",
+    elif group_choice == "Curve Shape Shocks":
+        _render_shock_group(
+            results,
+            curve_ids,
+            title="Curve-Shape Shock Present Value Comparison",
+            select_label="Select curve scenario",
+            select_key="curve_shock_select",
         )
-
-        sim_table = scenario_result.extra_tables.get("simulation_pv")
-        if sim_table is not None:
-            st.markdown("### Simulation-Level PV Distribution")
-            st.dataframe(sim_table)
-            _download_button(
-                "Download simulation PV distribution",
-                sim_table,
-                f"pv_distribution_{selected_scenario}.csv",
-            )
-
-        viz_data = extract_monte_carlo_data(results, scenario_id=selected_scenario)
-        if viz_data:
-            st.markdown("### Monte Carlo Visualisations")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                fig = plot_rate_path_spaghetti(viz_data["rate_sample"], viz_data["rate_summary"])
-                st.pyplot(fig)
-            with col_b:
-                fig = plot_rate_confidence_fan(viz_data["rate_summary"])
-                st.pyplot(fig)
-            fig = plot_portfolio_pv_distribution(
-                viz_data["pv_distribution"],
-                book_value=viz_data.get("book_value"),
-                base_case_pv=viz_data.get("base_case_pv"),
-                percentiles=viz_data.get("percentiles"),
-            )
-            st.pyplot(fig)
-            fig = plot_percentile_ladder(
-                viz_data.get("percentiles", {}),
-                book_value=viz_data.get("book_value"),
-                base_case_pv=viz_data.get("base_case_pv"),
-            )
-            st.pyplot(fig)
-            dashboard = create_monte_carlo_dashboard(viz_data)
-            st.pyplot(dashboard)
-            try:
-                animation_fig = create_rate_path_animation(
-                    viz_data["rate_sample"], viz_data["rate_summary"]
-                )
-            except Exception as exc:
-                st.warning(
-                    f"Monte Carlo animation unavailable: {exc}",
-                    icon="⚠️",
-                )
-            else:
-                st.plotly_chart(animation_fig, use_container_width=True, key="mc_animation")
     else:
-        cashflows = scenario_result.cashflows
-        monthly_summary = (
-            cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
-            .sum()
-            .reset_index()
-        )
-
-        st.markdown(f"### Cash Flow Detail ' {selected_scenario}")
-        st.dataframe(monthly_summary)
-        sampled_cashflows = ReportGenerator.sample_cashflows(
-            cashflows, sample_size=CASHFLOW_SAMPLE_SIZE
-        )
-        _download_button(
-            f"Download cashflows ({selected_scenario})",
-            sampled_cashflows,
-            f"cashflows_{selected_scenario}.csv",
-        )
-
-        account_pv = scenario_result.account_level_pv
-        _download_button(
-            f"Download account-level PV ({selected_scenario})",
-            account_pv,
-            f"account_pv_{selected_scenario}.csv",
-        )
-
-        shock_viz_data = extract_shock_data(results, selected_scenario)
-        if shock_viz_data:
-            st.markdown("### Rate Shock Visualisations")
-            metric_cols = st.columns(3)
-
-            metric_cols[0].metric(
-                "Scenario PV",
-                f"${shock_viz_data['scenario_pv']:,.0f}",
-            )
-
-            if shock_viz_data.get("delta") is not None:
-                delta_display = f"${shock_viz_data['delta']:,.0f}"
-                delta_pct = shock_viz_data.get("delta_pct")
-                pct_display = f"{delta_pct * 100:+.2f}%" if delta_pct is not None else ""
-                metric_cols[1].metric("Δ vs Base", delta_display, pct_display)
-            else:
-                metric_cols[1].metric("Δ vs Base", "N/A", "")
-
-            metric_cols[2].metric(
-                "Max |Shock|",
-                f"{shock_viz_data['abs_max_bps']:,.0f} bps",
-                f"Avg {shock_viz_data['mean_bps']:.1f} bps",
-            )
-
-            col_left, col_right = st.columns(2)
-            with col_left:
-                fig = plot_shock_rate_paths(
-                    shock_viz_data["curve_comparison"],
-                    shock_viz_data["scenario_label"],
-                )
-                st.pyplot(fig)
-            with col_right:
-                fig = plot_shock_magnitude(
-                    shock_viz_data["curve_comparison"],
-                    shock_viz_data["scenario_label"],
-                )
-                st.pyplot(fig)
-
-            tenor_fig = plot_shock_tenor_comparison(
-                shock_viz_data["tenor_comparison"],
-                shock_viz_data["scenario_label"],
-            )
-            if tenor_fig:
-                st.pyplot(tenor_fig)
-
-            pv_fig = plot_shock_pv_delta(
-                base_pv=shock_viz_data["base_pv"],
-                scenario_pv=shock_viz_data["scenario_pv"],
-                scenario_label=shock_viz_data["scenario_label"],
-                delta=shock_viz_data.get("delta"),
-                delta_pct=shock_viz_data.get("delta_pct"),
-            )
-            if pv_fig:
-                st.pyplot(pv_fig)
-
-            _download_button(
-                "Download curve comparison",
-                shock_viz_data["curve_comparison"],
-                f"curve_comparison_{selected_scenario}.csv",
-            )
-            if shock_viz_data.get("tenor_comparison") is not None:
-                _download_button(
-                    "Download tenor comparison",
-                    shock_viz_data["tenor_comparison"],
-                    f"tenor_comparison_{selected_scenario}.csv",
-                )
+        _render_monte_carlo_group(results, monte_carlo_ids)
 
     if progress_bar:
         progress_bar.progress(100)

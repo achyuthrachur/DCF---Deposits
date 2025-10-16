@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -249,5 +249,102 @@ def plot_shock_pv_delta(
             color="#333333",
         )
 
+    fig.tight_layout()
+    return fig
+
+
+def plot_shock_group_summary(
+    results: EngineResults,
+    scenario_ids: Sequence[str],
+    *,
+    title: str,
+) -> Optional[plt.Figure]:
+    """Plot PV comparison across a group of deterministic shock scenarios."""
+    if not scenario_ids:
+        return None
+
+    base_result = (
+        results.scenario_results.get(results.base_scenario_id)
+        if results.base_scenario_id
+        else None
+    )
+    base_pv = float(base_result.present_value) if base_result else None
+
+    rows: list[Dict[str, object]] = []
+    if base_result is not None:
+        base_label = (
+            base_result.metadata.get("description")
+            if base_result.metadata
+            else None
+        )
+        rows.append(
+            {
+                "label": base_label or "Base case",
+                "pv": base_pv,
+                "delta": 0.0,
+                "color": "#4f81bd",
+            }
+        )
+
+    for scenario_id in scenario_ids:
+        scenario = results.scenario_results.get(scenario_id)
+        if scenario is None:
+            continue
+        label = (
+            scenario.metadata.get("description")
+            if scenario.metadata
+            else None
+        )
+        pv = float(scenario.present_value)
+        delta = pv - base_pv if base_pv is not None else None
+        color = "#c0504d" if delta is not None and delta < 0 else "#9bbb59"
+        rows.append(
+            {
+                "label": label or scenario_id.replace("_", " ").title(),
+                "pv": pv,
+                "delta": delta,
+                "color": color,
+            }
+        )
+
+    if not rows:
+        return None
+
+    labels = [row["label"] for row in rows]
+    values = [row["pv"] for row in rows]
+    colors = [row["color"] for row in rows]
+
+    fig, ax = _setup_figure(figsize=(10.5, 6))
+    positions = np.arange(len(labels))
+    ax.bar(positions, values, color=colors, edgecolor="black", alpha=0.85)
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+
+    for idx, row in enumerate(rows):
+        ax.text(
+            positions[idx],
+            values[idx],
+            f"${values[idx]:,.0f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            fontweight="bold",
+        )
+        delta = row.get("delta")
+        if delta is not None and abs(delta) > 1e-6:
+            ax.text(
+                positions[idx],
+                values[idx] * 0.98,
+                f"{delta:+,.0f}",
+                ha="center",
+                va="top",
+                fontsize=9,
+                color="#333333",
+            )
+
+    ax.set_ylabel("Present Value ($)")
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.grid(True, axis="y", alpha=0.25)
+    _format_currency_axis(ax, values, axis="y")
     fig.tight_layout()
     return fig

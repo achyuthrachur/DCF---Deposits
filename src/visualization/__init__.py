@@ -42,6 +42,7 @@ try:
         plot_shock_magnitude,
         plot_shock_tenor_comparison,
         plot_shock_pv_delta,
+        plot_shock_group_summary,
     )
 except Exception as exc:  # pragma: no cover - graceful degradation
     logging.getLogger(__name__).warning(
@@ -60,5 +61,6 @@ else:
             "plot_shock_magnitude",
             "plot_shock_tenor_comparison",
             "plot_shock_pv_delta",
+            "plot_shock_group_summary",
         ]
     )

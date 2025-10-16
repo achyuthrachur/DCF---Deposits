@@ -339,6 +339,45 @@ class ALMEngine:
         results = EngineResults(base_scenario_id="base")
         emit_progress(0, "Initializing scenario projections...")
 
+        if self._assumptions.segments:
+            segmentation_map = {
+                "all": None,
+                "by_account_type": "account_type",
+                "by_customer_segment": "customer_segment",
+                "cross": "account_type_customer_segment",
+            }
+            segment_mode = segmentation_map.get(self.segmentation_method, None)
+            balances_by_segment: Dict[str, float] = {}
+            total_balance = 0.0
+            for account in self.accounts:
+                segment_key = account.key(segment_mode)
+                if segment_key not in self._assumptions.segments:
+                    raise ValueError(
+                        f"No assumptions configured for segment '{segment_key}'."
+                    )
+                balance = abs(float(account.balance))
+                total_balance += balance
+                balances_by_segment[segment_key] = balances_by_segment.get(
+                    segment_key, 0.0
+                ) + balance
+            if total_balance > 0:
+                weighted_wal_years = 0.0
+                for segment_key, balance in balances_by_segment.items():
+                    weighted_wal_years += (
+                        balance * self._assumptions.segments[segment_key].wal_years
+                    )
+                weighted_wal_years /= total_balance
+                max_projection_months_allowed = max(
+                    1, int(weighted_wal_years * 12)
+                )
+                if self.projection_months > max_projection_months_allowed:
+                    raise ValueError(
+                        "Projection horizon of "
+                        f"{self.projection_months} months exceeds the portfolio weighted "
+                        f"average life ({weighted_wal_years:.2f} years). Reduce the horizon or "
+                        "increase the WAL assumptions."
+                    )
+
         for index, (scenario, scenario_steps) in enumerate(
             scenario_step_info, start=1
         ):
