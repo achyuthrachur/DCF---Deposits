@@ -34,10 +34,15 @@ from src.visualization import (
     create_monte_carlo_dashboard,
     create_rate_path_animation,
     extract_monte_carlo_data,
+    extract_shock_data,
     plot_percentile_ladder,
     plot_portfolio_pv_distribution,
     plot_rate_confidence_fan,
     plot_rate_path_spaghetti,
+    plot_shock_magnitude,
+    plot_shock_pv_delta,
+    plot_shock_rate_paths,
+    plot_shock_tenor_comparison,
 )
 
 # Crowe logo SVG fallback for hosting environments where the asset file isn't available.
@@ -1241,6 +1246,73 @@ def main() -> None:
             account_pv,
             f"account_pv_{selected_scenario}.csv",
         )
+
+        shock_viz_data = extract_shock_data(results, selected_scenario)
+        if shock_viz_data:
+            st.markdown("### Rate Shock Visualisations")
+            metric_cols = st.columns(3)
+
+            metric_cols[0].metric(
+                "Scenario PV",
+                f"${shock_viz_data['scenario_pv']:,.0f}",
+            )
+
+            if shock_viz_data.get("delta") is not None:
+                delta_display = f"${shock_viz_data['delta']:,.0f}"
+                delta_pct = shock_viz_data.get("delta_pct")
+                pct_display = f"{delta_pct * 100:+.2f}%" if delta_pct is not None else ""
+                metric_cols[1].metric("Δ vs Base", delta_display, pct_display)
+            else:
+                metric_cols[1].metric("Δ vs Base", "N/A", "")
+
+            metric_cols[2].metric(
+                "Max |Shock|",
+                f"{shock_viz_data['abs_max_bps']:,.0f} bps",
+                f"Avg {shock_viz_data['mean_bps']:.1f} bps",
+            )
+
+            col_left, col_right = st.columns(2)
+            with col_left:
+                fig = plot_shock_rate_paths(
+                    shock_viz_data["curve_comparison"],
+                    shock_viz_data["scenario_label"],
+                )
+                st.pyplot(fig)
+            with col_right:
+                fig = plot_shock_magnitude(
+                    shock_viz_data["curve_comparison"],
+                    shock_viz_data["scenario_label"],
+                )
+                st.pyplot(fig)
+
+            tenor_fig = plot_shock_tenor_comparison(
+                shock_viz_data["tenor_comparison"],
+                shock_viz_data["scenario_label"],
+            )
+            if tenor_fig:
+                st.pyplot(tenor_fig)
+
+            pv_fig = plot_shock_pv_delta(
+                base_pv=shock_viz_data["base_pv"],
+                scenario_pv=shock_viz_data["scenario_pv"],
+                scenario_label=shock_viz_data["scenario_label"],
+                delta=shock_viz_data.get("delta"),
+                delta_pct=shock_viz_data.get("delta_pct"),
+            )
+            if pv_fig:
+                st.pyplot(pv_fig)
+
+            _download_button(
+                "Download curve comparison",
+                shock_viz_data["curve_comparison"],
+                f"curve_comparison_{selected_scenario}.csv",
+            )
+            if shock_viz_data.get("tenor_comparison") is not None:
+                _download_button(
+                    "Download tenor comparison",
+                    shock_viz_data["tenor_comparison"],
+                    f"tenor_comparison_{selected_scenario}.csv",
+                )
 
     if progress_bar:
         progress_bar.progress(100)

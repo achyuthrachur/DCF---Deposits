@@ -399,12 +399,114 @@ class ALMEngine:
                 )
                 account_pv = pv_calculator.account_level_pv(cashflows)
                 portfolio_pv = pv_calculator.portfolio_pv(cashflows)
+                months_range = np.arange(1, self.projection_months + 1)
+                base_curve = self.discount_curve()
+                base_rates = np.array(
+                    [float(base_curve.get_rate(month)) for month in months_range],
+                    dtype=float,
+                )
+                shock_adjustments = np.array(
+                    [float(scenario.rate_adjustment(month)) for month in months_range],
+                    dtype=float,
+                )
+                scenario_rates = base_rates + shock_adjustments
+                curve_comparison = pd.DataFrame(
+                    {
+                        "month": months_range,
+                        "base_rate": base_rates,
+                        "scenario_rate": scenario_rates,
+                        "shock_decimal": shock_adjustments,
+                        "shock_bps": shock_adjustments * 10000.0,
+                    }
+                )
+
+                tenor_rows: List[Dict[str, float]] = []
+                scenario_meta = scenario.metadata or {}
+                base_curve_dict = scenario_meta.get("base_curve")
+                scenario_curve_dict = scenario_meta.get("scenario_curve")
+                if base_curve_dict and scenario_curve_dict:
+                    tenor_keys = sorted(
+                        {int(k) for k in base_curve_dict.keys()}
+                        | {int(k) for k in scenario_curve_dict.keys()}
+                    )
+                    for tenor in tenor_keys:
+                        base_rate = float(
+                            base_curve_dict.get(
+                                tenor, base_curve.rate_for_month(tenor)
+                            )
+                        )
+                        scenario_rate = float(
+                            scenario_curve_dict.get(
+                                tenor, base_rate + scenario.rate_adjustment(tenor)
+                            )
+                        )
+                        tenor_rows.append(
+                            {
+                                "tenor_months": tenor,
+                                "base_rate": base_rate,
+                                "scenario_rate": scenario_rate,
+                            }
+                        )
+                else:
+                    tenor_candidates = sorted(
+                        {int(max(tenor, 1)) for tenor in getattr(base_curve, "annual_rates", {}).keys()}
+                    )
+                    if not tenor_candidates:
+                        tenor_candidates = [1, 3, 6, 12, 24, 36, 60, 120]
+                    for tenor in tenor_candidates:
+                        base_rate = float(base_curve.get_rate(tenor))
+                        scenario_rate = base_rate + float(scenario.rate_adjustment(tenor))
+                        tenor_rows.append(
+                            {
+                                "tenor_months": tenor,
+                                "base_rate": base_rate,
+                                "scenario_rate": scenario_rate,
+                            }
+                        )
+
+                extra_tables: Dict[str, pd.DataFrame] = {
+                    "curve_comparison": curve_comparison,
+                }
+                if tenor_rows:
+                    tenor_df = pd.DataFrame(tenor_rows)
+                    tenor_df["tenor_years"] = tenor_df["tenor_months"] / 12.0
+                    tenor_df["shock_decimal"] = (
+                        tenor_df["scenario_rate"] - tenor_df["base_rate"]
+                    )
+                    tenor_df["shock_bps"] = tenor_df["shock_decimal"] * 10000.0
+                    extra_tables["curve_tenor_comparison"] = tenor_df
+
+                shock_series = curve_comparison["shock_bps"]
+                if not shock_series.empty:
+                    min_bps = float(shock_series.min())
+                    max_bps = float(shock_series.max())
+                    mean_bps = float(shock_series.mean())
+                    abs_max_bps = float(np.max(np.abs(shock_series.to_numpy(dtype=float))))
+                else:
+                    min_bps = max_bps = mean_bps = abs_max_bps = 0.0
+                shock_stats = {
+                    "min_bps": min_bps,
+                    "max_bps": max_bps,
+                    "mean_bps": mean_bps,
+                    "abs_max_bps": abs_max_bps,
+                }
+
+                metadata = {
+                    "method": scenario.scenario_type.value,
+                    "description": scenario.description,
+                    "shock_vector": dict(scenario.shock_vector),
+                    "shock_stats": shock_stats,
+                }
+                if scenario_meta:
+                    metadata["scenario_details"] = scenario_meta
+
                 scenario_result = ScenarioResult(
                     scenario_id=scenario.scenario_id,
                     cashflows=cashflows,
                     present_value=portfolio_pv,
                     account_level_pv=account_pv,
-                    metadata={"method": scenario.scenario_type.value},
+                    metadata=metadata,
+                    extra_tables=extra_tables,
                 )
                 current_step += scenario_steps
             results.add_result(scenario_result)

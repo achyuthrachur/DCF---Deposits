@@ -9,3 +9,10 @@ from .monte_carlo_plots import (  # noqa: F401
     create_monte_carlo_dashboard,
     create_rate_path_animation,
 )
+from .shock_plots import (  # noqa: F401
+    extract_shock_data,
+    plot_shock_rate_paths,
+    plot_shock_magnitude,
+    plot_shock_tenor_comparison,
+    plot_shock_pv_delta,
+)
