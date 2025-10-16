@@ -56,7 +56,9 @@ class ALMEngine:
         self.accounts: List[AccountRecord] = []
         self._assumptions = AssumptionSet(segmentation_method="all")
         self.segmentation_method = "all"
-        self.projection_months = 120
+        self.projection_months = 240
+        self.max_projection_months = 600
+        self.materiality_threshold = 1_000.0
         self._market_rate_path: Optional[Sequence[float]] = None
         self._discount_config: Optional[DiscountConfig] = None
         self._scenario_set = ScenarioSet()
@@ -118,16 +120,38 @@ class ALMEngine:
         self.segmentation_method = method
         self._assumptions.segmentation_method = method
 
+    def set_projection_horizon(
+        self,
+        months: int,
+        *,
+        materiality_threshold: Optional[float] = None,
+        max_months: Optional[int] = None,
+    ) -> None:
+        """Update the projection horizon and materiality threshold."""
+        if months <= 0:
+            raise ValueError("Projection horizon must be positive.")
+        self.projection_months = int(months)
+        if materiality_threshold is not None:
+            if materiality_threshold < 0:
+                raise ValueError("Materiality threshold cannot be negative.")
+            self.materiality_threshold = float(materiality_threshold)
+        if max_months is not None:
+            if max_months < self.projection_months:
+                raise ValueError("max_months cannot be less than projection_months.")
+            self.max_projection_months = int(max_months)
+
     # --------------------------------------------------------------- Assumptions
     def set_assumptions(
         self,
         segment_key: str,
-        decay_rate: float,
-        wal_years: float,
+        decay_rate: Optional[float],
+        wal_years: Optional[float],
         deposit_beta_up: float,
         deposit_beta_down: float,
         repricing_beta_up: float,
         repricing_beta_down: float,
+        *,
+        decay_priority: str = "auto",
         notes: Optional[str] = None,
     ) -> None:
         """Set the assumptions for a specific segment."""
@@ -139,6 +163,7 @@ class ALMEngine:
             deposit_beta_down=deposit_beta_down,
             repricing_beta_up=repricing_beta_up,
             repricing_beta_down=repricing_beta_down,
+            decay_priority=decay_priority,
             notes=notes,
         )
         self._assumptions.add(assumption)
@@ -219,8 +244,81 @@ class ALMEngine:
             return
         self._market_rate_path = tuple(
             float(self._discount_config.curve.get_rate(month))
-            for month in range(1, self.projection_months + 1)
+            for month in range(1, self.max_projection_months + 1)
         )
+
+    def _build_parameter_summary(self, results: EngineResults) -> Dict[str, Any]:
+        """Assemble portfolio- and segment-level summary metrics."""
+        total_balance = float(sum(account.balance for account in self.accounts))
+        account_count = len(self.accounts)
+        segmentation_map = {
+            "all": None,
+            "by_account_type": "account_type",
+            "by_customer_segment": "customer_segment",
+            "cross": "account_type_customer_segment",
+        }
+        segment_mode = segmentation_map.get(self.segmentation_method, None)
+        balances_by_segment: Dict[str, float] = {}
+        for account in self.accounts:
+            segment_key = account.key(segment_mode)
+            balances_by_segment[segment_key] = balances_by_segment.get(segment_key, 0.0) + float(account.balance)
+
+        segments_summary: List[Dict[str, Any]] = []
+        for segment_key, assumption in self._assumptions.segments.items():
+            segments_summary.append(
+                {
+                    "segment": segment_key,
+                    "input_wal_years": assumption.input_wal_years,
+                    "input_decay_rate": assumption.input_decay_rate,
+                    "resolved_wal_years": assumption.resolved_wal_years,
+                    "resolved_decay_rate": assumption.resolved_decay_rate,
+                    "monthly_decay_rate": assumption.resolved_monthly_decay_rate,
+                    "decay_priority": assumption.decay_priority,
+                    "decay_warning": assumption.decay_warning,
+                    "difference_years": assumption.decay_difference_years,
+                    "difference_ratio": assumption.decay_difference_ratio,
+                    "deposit_beta_up": assumption.deposit_beta_up,
+                    "deposit_beta_down": assumption.deposit_beta_down,
+                    "repricing_beta_up": assumption.repricing_beta_up,
+                    "repricing_beta_down": assumption.repricing_beta_down,
+                }
+            )
+
+        weighted_wal_years: Optional[float] = None
+        if total_balance:
+            numerator = 0.0
+            for segment_key, balance in balances_by_segment.items():
+                assumption = self._assumptions.segments.get(segment_key)
+                if assumption is not None:
+                    numerator += abs(balance) * assumption.resolved_wal_years
+            weighted_wal_years = numerator / total_balance if numerator else 0.0
+
+        base_result = None
+        if results.base_scenario_id and results.base_scenario_id in results.scenario_results:
+            base_result = results.scenario_results[results.base_scenario_id]
+
+        actual_projection_months: Optional[int] = None
+        residual_balance: Optional[float] = None
+        if base_result is not None and not base_result.cashflows.empty:
+            actual_projection_months = int(base_result.cashflows["month"].max())
+            last_month_cf = base_result.cashflows[base_result.cashflows["month"] == actual_projection_months]
+            residual_balance = float(last_month_cf["ending_balance"].sum())
+
+        return {
+            "portfolio": {
+                "starting_balance": total_balance,
+                "account_count": account_count,
+                "weighted_average_wal_years": float(weighted_wal_years) if weighted_wal_years is not None else None,
+            },
+            "projection": {
+                "projection_months": self.projection_months,
+                "max_projection_months": self.max_projection_months,
+                "materiality_threshold": self.materiality_threshold,
+                "actual_projection_months": actual_projection_months,
+                "residual_balance": residual_balance,
+            },
+            "segments": segments_summary,
+        }
 
     def discount_curve(self) -> DiscountCurve:
         """Return the configured discount curve."""
@@ -240,7 +338,7 @@ class ALMEngine:
     ) -> None:
         """Set the base market rate path used for scenario comparisons."""
         if isinstance(rates, (int, float)):
-            self._market_rate_path = [float(rates)] * self.projection_months
+            self._market_rate_path = tuple(float(rates) for _ in range(self.max_projection_months))
         else:
             if len(rates) == 0:
                 raise ValueError("Rate path cannot be empty")
@@ -250,9 +348,9 @@ class ALMEngine:
         """Return the base market rate path."""
         if self._market_rate_path is None:
             raise ValueError("Base market rate path has not been configured.")
-        if len(self._market_rate_path) < self.projection_months:
+        if len(self._market_rate_path) < self.max_projection_months:
             last_rate = self._market_rate_path[-1]
-            extension = [last_rate] * (self.projection_months - len(self._market_rate_path))
+            extension = [last_rate] * (self.max_projection_months - len(self._market_rate_path))
             return tuple(self._market_rate_path) + tuple(extension)
         return self._market_rate_path
 
@@ -353,26 +451,47 @@ class ALMEngine:
             raise ValueError("Two-factor Monte Carlo requires long-rate parameters.")
         if config.level not in {MonteCarloLevel.STATIC_CURVE, MonteCarloLevel.TWO_FACTOR}:
             raise ValueError(f"Unsupported Monte Carlo level: {config.level}")
-        config.projection_months = self.projection_months
+        config.projection_months = self.max_projection_months
         self._monte_carlo_config = config
 
     # --------------------------------------------------------------- Execution
     def run_analysis(
         self,
         projection_months: Optional[int] = None,
+        materiality_threshold: Optional[float] = None,
+        max_projection_months: Optional[int] = None,
         progress_callback: Optional[
             Callable[[int, int, str], None]
         ] = None,
     ) -> EngineResults:
         """Execute the projection engine for all configured scenarios."""
-        if projection_months:
-            self.projection_months = projection_months
+        if (
+            projection_months is not None
+            or materiality_threshold is not None
+            or max_projection_months is not None
+        ):
+            horizon_months = projection_months if projection_months is not None else self.projection_months
+            threshold_value = (
+                materiality_threshold if materiality_threshold is not None else self.materiality_threshold
+            )
+            max_months_value = (
+                max_projection_months if max_projection_months is not None else self.max_projection_months
+            )
+            self.set_projection_horizon(
+                months=horizon_months,
+                materiality_threshold=threshold_value,
+                max_months=max_months_value,
+            )
+        if self._monte_carlo_config is not None:
+            self._monte_carlo_config.projection_months = self.max_projection_months
         self._validate_ready_state()
 
         settings = ProjectionSettings(
             projection_months=self.projection_months,
             segmentation_method=self.segmentation_method,
             base_market_rates=self.market_rate_path(),
+            materiality_threshold=self.materiality_threshold,
+            max_projection_months=self.max_projection_months,
         )
         projector = CashflowProjector(self._assumptions)
         base_discount_curve = self.discount_curve()
@@ -410,45 +529,6 @@ class ALMEngine:
         base_cashflow_summary: Optional[pd.Series] = None
         results = EngineResults(base_scenario_id="base")
         emit_progress(0, "Initializing scenario projections...")
-
-        if self._assumptions.segments:
-            segmentation_map = {
-                "all": None,
-                "by_account_type": "account_type",
-                "by_customer_segment": "customer_segment",
-                "cross": "account_type_customer_segment",
-            }
-            segment_mode = segmentation_map.get(self.segmentation_method, None)
-            balances_by_segment: Dict[str, float] = {}
-            total_balance = 0.0
-            for account in self.accounts:
-                segment_key = account.key(segment_mode)
-                if segment_key not in self._assumptions.segments:
-                    raise ValueError(
-                        f"No assumptions configured for segment '{segment_key}'."
-                    )
-                balance = abs(float(account.balance))
-                total_balance += balance
-                balances_by_segment[segment_key] = balances_by_segment.get(
-                    segment_key, 0.0
-                ) + balance
-            if total_balance > 0:
-                weighted_wal_years = 0.0
-                for segment_key, balance in balances_by_segment.items():
-                    weighted_wal_years += (
-                        balance * self._assumptions.segments[segment_key].wal_years
-                    )
-                weighted_wal_years /= total_balance
-                max_projection_months_allowed = max(
-                    1, int(weighted_wal_years * 12)
-                )
-                if self.projection_months > max_projection_months_allowed:
-                    raise ValueError(
-                        "Projection horizon of "
-                        f"{self.projection_months} months exceeds the portfolio weighted "
-                        f"average life ({weighted_wal_years:.2f} years). Reduce the horizon or "
-                        "increase the WAL assumptions."
-                    )
 
         for index, (scenario, scenario_steps) in enumerate(
             scenario_step_info, start=1
@@ -648,11 +728,20 @@ class ALMEngine:
                     "abs_max_bps": abs_max_bps,
                 }
 
+                actual_projection_months = int(cashflows["month"].max()) if not cashflows.empty else 0
+                residual_balance = None
+                if actual_projection_months > 0:
+                    last_month = cashflows[cashflows["month"] == actual_projection_months]
+                    residual_balance = float(last_month["ending_balance"].sum())
+
                 metadata = {
                     "method": scenario.scenario_type.value,
                     "description": scenario.description,
                     "shock_vector": dict(scenario.shock_vector),
                     "shock_stats": shock_stats,
+                    "actual_projection_months": actual_projection_months,
+                    "residual_balance": residual_balance,
+                    "materiality_threshold": self.materiality_threshold,
                 }
                 if scenario_meta:
                     metadata["scenario_details"] = scenario_meta
@@ -693,6 +782,8 @@ class ALMEngine:
                     "warnings": [f"Validation failed: {exc}"],
                 }
 
+        results.parameter_summary = self._build_parameter_summary(results)
+
         return results
 
     # ----------------------------------------------------------------- Helpers
@@ -731,7 +822,7 @@ class ALMEngine:
         """Execute Monte Carlo simulations (levels 1 & 2) and aggregate results."""
 
         config = MonteCarloConfig.from_metadata(dict(scenario.metadata or {}))
-        months = min(config.projection_months, settings.projection_months)
+        months = min(config.projection_months, settings.max_projection_months)
         if months <= 0:
             raise ValidationError("Monte Carlo projection horizon must be positive.")
 
@@ -769,6 +860,8 @@ class ALMEngine:
             projection_months=months,
             segmentation_method=settings.segmentation_method,
             base_market_rates=tuple(base_market_rates.tolist()),
+            materiality_threshold=settings.materiality_threshold,
+            max_projection_months=settings.max_projection_months,
         )
 
         pv_values = np.zeros(config.num_simulations, dtype=float)
@@ -1082,13 +1175,23 @@ class ALMEngine:
         )
         dist_validation = validate_distribution(pv_values, book_value=book_value)
 
+        actual_projection_months = int(expected_cashflows["month"].max()) if not expected_cashflows.empty else 0
+        residual_balance = None
+        if actual_projection_months > 0:
+            last_month_cf = expected_cashflows[expected_cashflows["month"] == actual_projection_months]
+            residual_balance = float(last_month_cf["ending_balance"].sum())
+
         summary_metadata = {
+
             "method": scenario.scenario_type.value,
             "level": int(config.level),
             "config": config.to_metadata(),
             "summary": summary_row,
             "pv_percentiles": percentiles,
             "book_value": book_value,
+            "actual_projection_months": actual_projection_months,
+            "residual_balance": residual_balance,
+            "materiality_threshold": self.materiality_threshold,
         }
 
         extra_tables: Dict[str, pd.DataFrame] = {

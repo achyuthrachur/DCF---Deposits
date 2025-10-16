@@ -48,6 +48,10 @@ class EngineResults(BaseModel):
         default=None,
         description="Dynamic validation outcomes comparing PV to expected ratios",
     )
+    parameter_summary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Portfolio- and assumption-level summary metrics",
+    )
 
     def add_result(self, result: ScenarioResult) -> None:
         """Store a scenario result."""

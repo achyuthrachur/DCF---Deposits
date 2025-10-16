@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil
 from typing import Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -18,9 +17,11 @@ from ..models.scenario import ScenarioDefinition
 class ProjectionSettings:
     """Settings required to run a projection."""
 
-    projection_months: int = 120
+    projection_months: int = 240
     segmentation_method: str = "all"
     base_market_rates: Sequence[float] = (0.0,)
+    materiality_threshold: float = 1_000.0
+    max_projection_months: int = 600
 
 
 class CashflowProjector:
@@ -40,8 +41,9 @@ class CashflowProjector:
     ) -> pd.DataFrame:
         """Compute monthly cash flows for the supplied accounts."""
         rows: List[dict] = []
+        horizon_months = max(settings.projection_months, settings.max_projection_months)
         base_rates = self._extend_rate_path(
-            settings.base_market_rates, settings.projection_months
+            settings.base_market_rates, horizon_months
         )
         account_list = list(accounts)
         total_accounts = len(account_list)
@@ -56,6 +58,8 @@ class CashflowProjector:
                     assumptions=assumptions,
                     scenario=scenario,
                     projection_months=settings.projection_months,
+                    max_projection_months=settings.max_projection_months,
+                    materiality_threshold=settings.materiality_threshold,
                     base_rates=base_rates,
                 )
             )
@@ -74,17 +78,19 @@ class CashflowProjector:
         assumptions: SegmentAssumptions,
         scenario: ScenarioDefinition,
         projection_months: int,
+        max_projection_months: int,
+        materiality_threshold: float,
         base_rates: np.ndarray,
     ) -> List[dict]:
         """Project a single account over the requested horizon."""
         monthly_decay = assumptions.monthly_decay_rate()
         balance = account.balance
-        base_deposit_rate = account.interest_rate
-        wal_months = max(1, int(ceil(assumptions.wal_years * 12)))
-        months_to_project = min(projection_months, wal_months)
-
+        deposit_rate = account.interest_rate
+        initial_market_rate = base_rates[0]
+        previous_scenario_rate = initial_market_rate
+        max_months = max(projection_months, max_projection_months)
         records: List[dict] = []
-        for month in range(1, months_to_project + 1):
+        for month in range(1, max_months + 1):
             base_rate = base_rates[month - 1]
             shock = scenario.rate_adjustment(month)
             repricing_beta = (
@@ -92,16 +98,16 @@ class CashflowProjector:
             )
             market_delta = shock * repricing_beta
             scenario_rate = max(0.0, base_rate + market_delta)
-            adjusted_rate = self._adjust_deposit_rate(
-                base_deposit_rate=base_deposit_rate,
-                market_delta=market_delta,
+            market_change = scenario_rate - previous_scenario_rate if month > 1 else scenario_rate - initial_market_rate
+            previous_deposit_rate = deposit_rate
+            deposit_rate = self._adjust_deposit_rate(
+                previous_rate=deposit_rate,
+                market_rate_change=market_change,
                 deposit_beta_up=assumptions.deposit_beta_up,
                 deposit_beta_down=assumptions.deposit_beta_down,
             )
             principal_runoff = balance * monthly_decay
-            if month == wal_months or principal_runoff >= balance:
-                principal_runoff = balance
-            interest = balance * (adjusted_rate / 12)
+            interest = balance * (deposit_rate / 12)
             ending_balance = balance - principal_runoff
             records.append(
                 {
@@ -112,14 +118,21 @@ class CashflowProjector:
                     "principal": principal_runoff,
                     "interest": interest,
                     "total_cash_flow": principal_runoff + interest,
-                    "account_rate": adjusted_rate,
+                    "deposit_rate": deposit_rate,
                     "scenario_rate": scenario_rate,
                     "base_rate": base_rate,
+                    "market_rate_change": market_change,
+                    "deposit_rate_change": deposit_rate - previous_deposit_rate,
+                    "monthly_decay_rate": monthly_decay,
                     "segment": assumptions.segment_key,
                 }
             )
+            previous_scenario_rate = scenario_rate
             balance = ending_balance
-            if balance <= 0:
+            if balance <= 0 or balance < 1e-6:
+                break
+            reached_horizon = month >= projection_months
+            if reached_horizon and ending_balance <= materiality_threshold:
                 break
         return records
 
@@ -139,14 +152,14 @@ class CashflowProjector:
     @staticmethod
     def _adjust_deposit_rate(
         *,
-        base_deposit_rate: float,
-        market_delta: float,
+        previous_rate: float,
+        market_rate_change: float,
         deposit_beta_up: float,
         deposit_beta_down: float,
     ) -> float:
         """Apply deposit beta to the market rate change to derive deposit rate."""
-        beta = deposit_beta_up if market_delta >= 0 else deposit_beta_down
-        adjusted = base_deposit_rate + market_delta * beta
+        beta = deposit_beta_up if market_rate_change >= 0 else deposit_beta_down
+        adjusted = previous_rate + market_rate_change * beta
         return max(0.0, adjusted)
 
     @staticmethod

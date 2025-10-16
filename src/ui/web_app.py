@@ -29,6 +29,7 @@ from src.engine import ALMEngine
 from src.core.fred_loader import FREDYieldCurveLoader
 from src.core.yield_curve import YieldCurve
 from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
+from src.core.decay import resolve_decay_parameters
 from src.visualization import (
     create_monte_carlo_dashboard,
     create_rate_path_animation,
@@ -64,7 +65,7 @@ OPTIONAL_FIELDS = {
 
 DEFAULT_ASSUMPTIONS = {
     "checking": {
-        "decay_rate": 0.05,
+        "decay_rate": 0.1828,
         "wal_years": 5.0,
         "deposit_beta_up": 0.40,
         "deposit_beta_down": 0.25,
@@ -72,7 +73,7 @@ DEFAULT_ASSUMPTIONS = {
         "repricing_beta_down": 1.00,
     },
     "savings": {
-        "decay_rate": 0.08,
+        "decay_rate": 0.2511,
         "wal_years": 3.5,
         "deposit_beta_up": 0.55,
         "deposit_beta_down": 0.35,
@@ -80,7 +81,7 @@ DEFAULT_ASSUMPTIONS = {
         "repricing_beta_down": 1.00,
     },
     "money market": {
-        "decay_rate": 0.20,
+        "decay_rate": 0.4961,
         "wal_years": 1.5,
         "deposit_beta_up": 0.75,
         "deposit_beta_down": 0.60,
@@ -175,13 +176,147 @@ def _default_for_segment(segment: str) -> Dict[str, float]:
     return DEFAULT_ASSUMPTIONS["checking"]
 
 
-def _decimalize(value: float) -> float:
+def _decimalize(value: Optional[float]) -> Optional[float]:
     """Convert percentage-based inputs to decimals."""
     if value is None:
-        return 0.0
+        return None
     if value > 1.5:
-        return value / 100.0
-    return value
+        return float(value / 100.0)
+    return float(value)
+
+
+def _select_sample_months(actual_months: Optional[int]) -> List[int]:
+    """Return representative months for sample cash flow output."""
+    if not actual_months:
+        return [1]
+    canonical = [1, 12, 24, 60, 120, 180, 240]
+    months = [month for month in canonical if month <= actual_months]
+    if actual_months not in months:
+        months.append(actual_months)
+    return sorted(set(months))
+
+
+def _build_cashflow_sample_table(
+    cashflows: pd.DataFrame, actual_months: Optional[int]
+) -> pd.DataFrame:
+    """Aggregate portfolio cash flows for selected months."""
+    if cashflows.empty:
+        return pd.DataFrame(
+            columns=[
+                "Month",
+                "Begin Balance",
+                "Decay %",
+                "Runoff",
+                "End Balance",
+                "Int Rate",
+                "Interest",
+                "Total Outflow",
+            ]
+        )
+    sample_months = _select_sample_months(actual_months)
+    aggregated = (
+        cashflows.groupby("month")
+        .agg(
+            beginning_balance=("beginning_balance", "sum"),
+            ending_balance=("ending_balance", "sum"),
+            principal=("principal", "sum"),
+            interest=("interest", "sum"),
+            total_cash_flow=("total_cash_flow", "sum"),
+            deposit_rate=("deposit_rate", "mean"),
+            monthly_decay_rate=("monthly_decay_rate", "mean"),
+        )
+        .reset_index()
+    )
+    subset = aggregated[aggregated["month"].isin(sample_months)].copy()
+    if subset.empty:
+        return pd.DataFrame()
+    subset["Decay %"] = subset["monthly_decay_rate"] * 100.0
+    subset["Int Rate"] = subset["deposit_rate"] * 100.0
+    subset = subset.rename(
+        columns={
+            "month": "Month",
+            "beginning_balance": "Begin Balance",
+            "principal": "Runoff",
+            "ending_balance": "End Balance",
+            "interest": "Interest",
+            "total_cash_flow": "Total Outflow",
+        }
+    )
+    ordered_columns = [
+        "Month",
+        "Begin Balance",
+        "Decay %",
+        "Runoff",
+        "End Balance",
+        "Int Rate",
+        "Interest",
+        "Total Outflow",
+    ]
+    subset = subset[ordered_columns]
+    for column in ordered_columns:
+        if column != "Month":
+            subset[column] = subset[column].astype(float)
+    return subset.sort_values("Month").reset_index(drop=True)
+
+
+def _render_parameter_summary(results: "EngineResults") -> None:
+    """Display parameter summary information in the UI."""
+    summary = results.parameter_summary or {}
+    if not summary:
+        st.info("Parameter summary unavailable. Run the analysis to refresh results.")
+        return
+
+    portfolio = summary.get("portfolio", {})
+    projection = summary.get("projection", {})
+    segments = summary.get("segments", [])
+
+    st.markdown("### NMD Parameter Summary")
+    st.markdown(
+        f"- Starting Balance: ${portfolio.get('starting_balance', 0.0):,.2f}\n"
+        f"- Account Count: {portfolio.get('account_count', 0)}\n"
+        f"- Portfolio Weighted WAL: {portfolio.get('weighted_average_wal_years') or 0:.2f} years"
+    )
+    st.markdown(
+        f"- Base Horizon: {projection.get('projection_months')} months\n"
+        f"- Max Horizon: {projection.get('max_projection_months')} months\n"
+        f"- Materiality Threshold: ${projection.get('materiality_threshold', 0):,.2f}\n"
+        f"- Actual Projection Length: {projection.get('actual_projection_months') or 0} months\n"
+        f"- Residual Balance: ${projection.get('residual_balance') or 0:,.2f}"
+    )
+
+    for segment in segments:
+        st.markdown(f"#### Segment: {segment.get('segment')}")
+        wal_input = segment.get("input_wal_years")
+        decay_input = segment.get("input_decay_rate")
+        resolved_wal = segment.get("resolved_wal_years")
+        resolved_decay = segment.get("resolved_decay_rate")
+        monthly_decay = segment.get("monthly_decay_rate")
+        lines = []
+        if wal_input is not None:
+            lines.append(f"Input WAL: {wal_input:.2f} years")
+        if decay_input is not None:
+            lines.append(f"Input Decay Rate: {decay_input * 100:.2f}%")
+        lines.append(f"Calculated WAL: {resolved_wal:.2f} years")
+        lines.append(f"Calculated Annual Decay: {resolved_decay * 100:.2f}%")
+        lines.append(f"Calculated Monthly Decay: {monthly_decay * 100:.2f}%")
+        lines.append(
+            f"Deposit Betas: ↑ {segment.get('deposit_beta_up'):.2f} | ↓ {segment.get('deposit_beta_down'):.2f}"
+        )
+        st.markdown("\n".join(f"- {item}" for item in lines))
+        warning = segment.get("decay_warning")
+        if warning:
+            st.warning(warning)
+
+    base_id = results.base_scenario_id
+    if base_id and base_id in results.scenario_results:
+        base_result = results.scenario_results[base_id]
+        sample_table = _build_cashflow_sample_table(
+            base_result.cashflows,
+            projection.get("actual_projection_months"),
+        )
+        if not sample_table.empty:
+            st.markdown("#### Deposit Cash Flow Schedule (Sample Months)")
+            st.dataframe(sample_table, use_container_width=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -300,7 +435,7 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
         )
         wal = st.number_input(
             f"{segment} ' Weighted Average Life (years)",
-            min_value=0.1,
+            min_value=0.0,
             max_value=15.0,
             value=defaults["wal_years"],
             step=0.1,
@@ -341,13 +476,85 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 step=0.05,
                 key=f"repricing_beta_down_{segment}",
             )
+        decay_input = decay if decay > 0 else None
+        wal_input = wal if wal > 0 else None
+
+        resolution = None
+        try:
+            resolution = resolve_decay_parameters(wal_input, decay_input, priority="auto")
+        except ValueError as exc:
+            st.error(f"{segment}: {exc}")
+            continue
+
+        decay_priority = resolution.priority_used
+        if resolution.inconsistent and resolution.warning:
+            st.warning(
+                f"{segment}: {resolution.warning} "
+                f"Difference: {resolution.difference_years:.2f} years "
+                f"({(resolution.difference_ratio or 0.0) * 100:.1f}%)."
+            )
+            priority_label = st.radio(
+                "Which parameter should take precedence?",
+                options=[
+                    "Use WAL (override decay rate)",
+                    "Use decay rate (override WAL)",
+                ],
+                index=0 if resolution.priority_used == "wal" else 1,
+                key=f"decay_priority_{segment}",
+                horizontal=True,
+            )
+            decay_priority = "wal" if priority_label.startswith("Use WAL") else "decay"
+        else:
+            if wal_input is not None and decay_input is not None:
+                st.info(
+                    f"{segment}: WAL and decay inputs align. "
+                    f"Difference {resolution.difference_years or 0.0:.2f} years."
+                )
+            elif wal_input is not None:
+                st.info(
+                    f"{segment}: WAL provided → derived annual decay "
+                    f"{resolution.annual_decay_rate * 100:.2f}% "
+                    f"(monthly {resolution.monthly_decay_rate * 100:.2f}%)."
+                )
+            elif decay_input is not None:
+                st.info(
+                    f"{segment}: Decay rate provided → implied WAL "
+                    f"{resolution.wal_years:.2f} years "
+                    f"(monthly {resolution.monthly_decay_rate * 100:.2f}%)."
+                )
+
+        summary_lines = []
+        if wal_input is not None:
+            summary_lines.append(f"Input: Weighted Average Life = {wal_input:.2f} years")
+        if decay_input is not None:
+            summary_lines.append(f"Input: Annual Decay Rate = {decay_input * 100:.2f}%")
+        summary_lines.append(
+            f"Calculated: Annual Decay Rate = {resolution.annual_decay_rate * 100:.2f}%"
+        )
+        summary_lines.append(
+            f"Calculated: Weighted Average Life = {resolution.wal_years:.2f} years"
+        )
+        summary_lines.append(
+            f"Calculated: Monthly Decay Rate = {resolution.monthly_decay_rate * 100:.2f}%"
+        )
+        st.markdown("\n".join(f"- {line}" for line in summary_lines))
+
         assumption_values[segment] = {
-            "decay_rate": decay,
-            "wal_years": wal,
+            "decay_rate": decay_input,
+            "wal_years": wal_input,
             "deposit_beta_up": deposit_beta_up,
             "deposit_beta_down": deposit_beta_down,
             "repricing_beta_up": repricing_beta_up,
             "repricing_beta_down": repricing_beta_down,
+            "decay_priority": decay_priority,
+            "resolved_decay_rate": resolution.annual_decay_rate,
+            "resolved_wal_years": resolution.wal_years,
+            "resolved_monthly_decay_rate": resolution.monthly_decay_rate,
+            "decay_warning": resolution.warning,
+            "implied_wal_from_decay": resolution.implied_wal_from_decay,
+            "implied_decay_from_wal": resolution.implied_decay_from_wal,
+            "decay_difference_years": resolution.difference_years,
+            "decay_difference_ratio": resolution.difference_ratio,
         }
     return assumption_values
 
@@ -861,8 +1068,8 @@ def main() -> None:
         }
         .brand-badge {
             position: fixed;
-            top: 18px;
-            right: 28px;
+            top: 70px;
+            left: 30px;
             z-index: 1100;
             padding: 6px 10px;
         }
@@ -1244,7 +1451,7 @@ def main() -> None:
 
     assumptions = _prepare_assumption_inputs(segments)
 
-    wal_lookup = {segment: values["wal_years"] for segment, values in assumptions.items()}
+    wal_lookup = {segment: values["resolved_wal_years"] for segment, values in assumptions.items()}
     wal_summary = segment_summary.copy()
     wal_summary["wal_years"] = wal_summary["segment"].map(wal_lookup)
     wal_summary = wal_summary.dropna(subset=["wal_years"])
@@ -1254,34 +1461,47 @@ def main() -> None:
             (wal_summary["balance"].abs() * wal_summary["wal_years"]).sum() / total_balance
         )
     elif wal_lookup:
-        weighted_wal_years = float(sum(wal_lookup.values()) / len(wal_lookup))
+        weighted_wal_years = float(sum(value for value in wal_lookup.values() if value))
     else:
         weighted_wal_years = 0.0
 
-    max_projection_months_allowed = max(1, int(weighted_wal_years * 12))
-    if max_projection_months_allowed < 12:
-        st.error(
-            "Weighted average life across segments is "
-            f"{weighted_wal_years:.2f} years ({max_projection_months_allowed} months). "
-            "Increase the WAL assumptions to run at least a 12-month projection."
-        )
-        return
-
     st.caption(
-        f"Portfolio weighted average life: {weighted_wal_years:.2f} years "
-        f"({max_projection_months_allowed} months). The projection horizon cannot exceed this value."
+        f"Portfolio weighted average life (reference only): {weighted_wal_years:.2f} years "
+        f"({weighted_wal_years * 12:.0f} months)."
     )
-    projection_months_cap = min(360, max_projection_months_allowed)
-    default_projection_months = min(120, projection_months_cap)
-
     st.markdown("### Step 3 - Projection Settings")
+    default_projection_months = int(st.session_state.get("projection_months_default", 240))
     projection_months = st.number_input(
-        "Projection horizon (months)",
+        "Base projection horizon (months)",
         min_value=12,
-        max_value=projection_months_cap,
+        max_value=600,
         step=12,
         value=default_projection_months,
+        key="projection_months_input",
     )
+    default_max_months = int(
+        st.session_state.get("max_projection_months_default", max(360, projection_months))
+    )
+    max_projection_months = st.number_input(
+        "Maximum projection horizon (months)",
+        min_value=int(projection_months),
+        max_value=720,
+        step=12,
+        value=max(default_max_months, int(projection_months)),
+        key="max_projection_months_input",
+    )
+    default_materiality = float(st.session_state.get("materiality_threshold_default", 1_000.0))
+    materiality_threshold = st.number_input(
+        "Materiality threshold for remaining balance",
+        min_value=0.0,
+        max_value=10_000_000.0,
+        step=500.0,
+        value=default_materiality,
+        format="%.2f",
+    )
+    st.session_state["projection_months_default"] = int(projection_months)
+    st.session_state["max_projection_months_default"] = int(max_projection_months)
+    st.session_state["materiality_threshold_default"] = float(materiality_threshold)
 
     discount_method = st.radio(
         "Discount rate configuration",
@@ -1429,7 +1649,7 @@ def main() -> None:
             f"Base market rate path derived from the selected curve (month 1: {base_market_path[0] * 100:.2f}%)."
         )
     else:
-        base_market_path = [0.03] * int(projection_months)
+        base_market_path = [0.03] * int(max_projection_months)
         st.caption(
             "No yield curve selected yet  using a flat 3% base market path until a curve is configured."
         )
@@ -1460,14 +1680,18 @@ def main() -> None:
             )
             engine.set_segmentation(segmentation)
             for segment_key, values in assumptions.items():
+                decay_rate_value = (
+                    _decimalize(values["decay_rate"]) if values.get("decay_rate") is not None else None
+                )
                 engine.set_assumptions(
                     segment_key=segment_key,
-                    decay_rate=_decimalize(values["decay_rate"]),
+                    decay_rate=decay_rate_value,
                     wal_years=values["wal_years"],
                     deposit_beta_up=_decimalize(values["deposit_beta_up"]),
                     deposit_beta_down=_decimalize(values["deposit_beta_down"]),
                     repricing_beta_up=_decimalize(values["repricing_beta_up"]),
                     repricing_beta_down=_decimalize(values["repricing_beta_down"]),
+                    decay_priority=values.get("decay_priority", "auto"),
                 )
             mode = discount_config.get("mode")
             if mode == "single":
@@ -1496,7 +1720,7 @@ def main() -> None:
                     engine.set_discount_curve(curve_snapshot, source="fred")
             base_market_path = st.session_state.get(
                 "base_market_path",
-                [0.03] * int(projection_months),
+                [0.03] * int(max_projection_months),
             )
             engine.set_base_market_rate_path(base_market_path)
             if monte_carlo_config:
@@ -1513,6 +1737,8 @@ def main() -> None:
             with st.spinner("Executing cash flow projections..."):
                 results = engine.run_analysis(
                     projection_months=int(projection_months),
+                    materiality_threshold=float(materiality_threshold),
+                    max_projection_months=int(max_projection_months),
                     progress_callback=progress_callback,
                 )
         except ValueError as exc:
@@ -1545,6 +1771,8 @@ def main() -> None:
             st.caption(
                 "Displaying previously generated visualisations. Run the analysis again to refresh."
             )
+
+    _render_parameter_summary(results)
 
     scenario_results = results.scenario_results
     if not scenario_results:
