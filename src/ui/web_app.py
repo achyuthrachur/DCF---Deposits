@@ -388,38 +388,42 @@ def _collect_scenarios(
 
             short_col = st.columns(3)
             with short_col[0]:
-                short_a = st.number_input(
-                    "Short mean reversion (a)",
+                short_speed = st.number_input(
+                    "Reversion speed to 3M rate",
                     min_value=0.0,
                     max_value=1.0,
                     value=0.15,
                     step=0.01,
-                    key="mc_short_a",
+                    format="%.2f",
+                    help="How quickly the simulated 3M rate gravitates back toward its typical level (0 = never, 1 = instantly).",
+                    key="mc_short_speed",
                 )
             with short_col[1]:
-                short_b = st.number_input(
-                    "Short anchor (b)",
+                short_avg_pct = st.number_input(
+                    "Short-term average rate (%)",
                     min_value=0.0,
-                    max_value=0.20,
-                    value=float(short_anchor),
-                    step=0.001,
-                    format="%.3f",
-                    key="mc_short_b",
+                    max_value=20.0,
+                    value=float(short_anchor) * 100.0,
+                    step=0.05,
+                    format="%.2f",
+                    help="Long-run average level for the 3M rate.",
+                    key="mc_short_avg_pct",
                 )
             with short_col[2]:
-                short_sigma = st.number_input(
-                    "Short volatility (sigma)",
+                short_vol_pct = st.number_input(
+                    "Annual volatility of 3M rate (%)",
                     min_value=0.0,
-                    max_value=0.10,
-                    value=0.01,
-                    step=0.001,
-                    format="%.3f",
-                    key="mc_short_sigma",
+                    max_value=10.0,
+                    value=1.0,
+                    step=0.05,
+                    format="%.2f",
+                    help="Annualised volatility applied to the 3M rate path.",
+                    key="mc_short_vol_pct",
                 )
             short_params = VasicekParams(
-                mean_reversion=float(short_a),
-                long_term_mean=float(short_b),
-                volatility=float(short_sigma),
+                mean_reversion=float(short_speed),
+                long_term_mean=float(short_avg_pct) / 100.0,
+                volatility=float(short_vol_pct) / 100.0,
             )
 
             long_params = None
@@ -427,38 +431,42 @@ def _collect_scenarios(
             if level == MonteCarloLevel.TWO_FACTOR:
                 long_col = st.columns(3)
                 with long_col[0]:
-                    long_a = st.number_input(
-                        "Long mean reversion (a)",
+                    long_speed = st.number_input(
+                        "Reversion speed to 10Y rate",
                         min_value=0.0,
                         max_value=1.0,
                         value=0.07,
                         step=0.01,
-                        key="mc_long_a",
+                        format="%.2f",
+                        help="How quickly the simulated 10Y anchor returns toward its typical level.",
+                        key="mc_long_speed",
                     )
                 with long_col[1]:
-                    long_b = st.number_input(
-                        "Long anchor (b)",
+                    long_avg_pct = st.number_input(
+                        "Long-term average 10Y rate (%)",
                         min_value=0.0,
-                        max_value=0.20,
-                        value=float(long_anchor),
-                        step=0.001,
-                        format="%.3f",
-                        key="mc_long_b",
+                        max_value=20.0,
+                        value=float(long_anchor) * 100.0,
+                        step=0.05,
+                        format="%.2f",
+                        help="Long-run average level for the 10Y anchor.",
+                        key="mc_long_avg_pct",
                     )
                 with long_col[2]:
-                    long_sigma = st.number_input(
-                        "Long volatility (sigma)",
+                    long_vol_pct = st.number_input(
+                        "Annual volatility of 10Y rate (%)",
                         min_value=0.0,
-                        max_value=0.10,
-                        value=0.008,
-                        step=0.001,
-                        format="%.3f",
-                        key="mc_long_sigma",
+                        max_value=10.0,
+                        value=0.8,
+                        step=0.05,
+                        format="%.2f",
+                        help="Annualised volatility applied to the 10Y anchor.",
+                        key="mc_long_vol_pct",
                     )
                 long_params = VasicekParams(
-                    mean_reversion=float(long_a),
-                    long_term_mean=float(long_b),
-                    volatility=float(long_sigma),
+                    mean_reversion=float(long_speed),
+                    long_term_mean=float(long_avg_pct) / 100.0,
+                    volatility=float(long_vol_pct) / 100.0,
                 )
                 correlation = st.slider(
                     "Correlation between 3M and 10Y shocks",
