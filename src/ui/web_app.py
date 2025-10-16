@@ -1218,9 +1218,13 @@ def main() -> None:
                 animation_fig = create_rate_path_animation(
                     viz_data["rate_sample"], viz_data["rate_summary"]
                 )
+            except Exception as exc:
+                st.warning(
+                    f"Monte Carlo animation unavailable: {exc}",
+                    icon="⚠️",
+                )
+            else:
                 st.plotly_chart(animation_fig, use_container_width=True, key="mc_animation")
-            except Exception:
-                pass
     else:
         cashflows = scenario_result.cashflows
         monthly_summary = (
