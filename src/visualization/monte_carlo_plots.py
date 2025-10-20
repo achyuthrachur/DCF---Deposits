@@ -557,15 +557,15 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
     if percentiles:
         order = ["p1", "p5", "p10", "p25", "p50", "p75", "p90", "p95", "p99"]
         percentile_labels = {
-            "p1": "1st percentile",
-            "p5": "5th percentile",
-            "p10": "10th percentile",
-            "p25": "25th percentile",
-            "p50": "Median (50th)",
-            "p75": "75th percentile",
-            "p90": "90th percentile",
-            "p95": "95th percentile",
-            "p99": "99th percentile",
+            "p1": "1st",
+            "p5": "5th",
+            "p10": "10th",
+            "p25": "25th",
+            "p50": "50th",
+            "p75": "75th",
+            "p90": "90th",
+            "p95": "95th",
+            "p99": "99th",
         }
         labels = [percentile_labels[s] for s in order if s in percentiles]
         values = [percentiles[s] for s in order if s in percentiles]
@@ -580,10 +580,13 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         )
         ax5.set_yticks(y_pos)
         ax5.set_yticklabels(labels)
+        line_annotations: list[tuple[float, str, dict[str, object]]] = []
         if book_value is not None:
-            ax5.axvline(book_value, color="#1f1f1f", linestyle="--", linewidth=1.5, label="Book value", zorder=5)
+            ax5.axvline(book_value, color="#1f1f1f", linestyle="--", linewidth=1.4, zorder=5)
+            line_annotations.append((book_value, "Book value", {"color": "#1f1f1f"}))
         if base_case_pv is not None:
-            ax5.axvline(base_case_pv, color="#f6a21a", linestyle=":", linewidth=1.5, label="Base case PV", zorder=5)
+            ax5.axvline(base_case_pv, color="#f6a21a", linestyle=":", linewidth=1.4, zorder=5)
+            line_annotations.append((base_case_pv, "Base case", {"color": "#b56b00"}))
         ax5.set_xlabel("Present value ($)")
         ax5.set_title("Percentile ladder", fontweight="bold")
         reference_values = list(values)
@@ -593,25 +596,42 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
             reference_values.append(base_case_pv)
         _format_currency_axis(ax5, reference_values, axis="x")
         max_value = max(reference_values) if reference_values else 0
-        x_max = max_value * 1.08 if max_value else 1
+        x_max = max_value * 1.15 if max_value else 1
         ax5.set_xlim(0, x_max)
-        max_value = max(reference_values) if reference_values else 0
-        label_offset = max_value * 0.008 if max_value else 0.02
+        label_offset = max_value * 0.04 if max_value else 0.05
         for rect, val in zip(bars, values):
             y_center = rect.get_y() + rect.get_height() / 2
+            text_x = val - label_offset
+            if text_x <= max_value * 0.02:
+                text_x = val + label_offset
+                ha = "left"
+            else:
+                ha = "right"
             ax5.text(
-                min(val + label_offset, x_max),
+                min(max(text_x, 0), x_max),
                 y_center,
                 f"${val:,.0f}",
                 va="center",
-                ha="left",
+                ha=ha,
                 fontsize=9,
-                color="#2b2b2b",
+                color="#203040",
                 fontweight="bold",
+                clip_on=True,
             )
-        if (book_value is not None) or (base_case_pv is not None):
-            ax5.legend(loc="lower right", frameon=False)
         ax5.grid(True, alpha=0.2, axis="x", linestyle="--")
+        for xpos, label, style in line_annotations:
+            ax5.text(
+                xpos,
+                len(values) - 0.35,
+                label,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="bold",
+                color=style.get("color", "#1f1f1f"),
+                alpha=0.9,
+                clip_on=True,
+            )
         for spine in ("top", "right"):
             ax5.spines[spine].set_visible(False)
         ax5.set_axisbelow(True)
