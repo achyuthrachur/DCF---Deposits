@@ -570,13 +570,20 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         labels = [percentile_labels[s] for s in order if s in percentiles]
         values = [percentiles[s] for s in order if s in percentiles]
         y_pos = np.arange(len(values))
-        bars = ax5.barh(y_pos, values, color="#4f81bd", alpha=0.8, edgecolor="white", linewidth=0.6)
+        bars = ax5.barh(
+            y_pos,
+            values,
+            color="#6aa6d8",
+            alpha=0.9,
+            edgecolor="#f4f6fb",
+            linewidth=0.8,
+        )
         ax5.set_yticks(y_pos)
         ax5.set_yticklabels(labels)
         if book_value is not None:
-            ax5.axvline(book_value, color="black", linestyle="--", linewidth=1.8, label="Book value", zorder=5)
+            ax5.axvline(book_value, color="#1f1f1f", linestyle="--", linewidth=1.5, label="Book value", zorder=5)
         if base_case_pv is not None:
-            ax5.axvline(base_case_pv, color="orange", linestyle=":", linewidth=1.8, label="Base case PV", zorder=5)
+            ax5.axvline(base_case_pv, color="#f6a21a", linestyle=":", linewidth=1.5, label="Base case PV", zorder=5)
         ax5.set_xlabel("Present value ($)")
         ax5.set_title("Percentile ladder", fontweight="bold")
         reference_values = list(values)
@@ -586,20 +593,24 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
             reference_values.append(base_case_pv)
         _format_currency_axis(ax5, reference_values, axis="x")
         max_value = max(reference_values) if reference_values else 0
-        label_offset = max_value * 0.01
+        x_max = max_value * 1.08 if max_value else 1
+        ax5.set_xlim(0, x_max)
+        max_value = max(reference_values) if reference_values else 0
+        label_offset = max_value * 0.008 if max_value else 0.02
         for rect, val in zip(bars, values):
             y_center = rect.get_y() + rect.get_height() / 2
             ax5.text(
-                val + label_offset,
+                min(val + label_offset, x_max),
                 y_center,
                 f"${val:,.0f}",
                 va="center",
                 ha="left",
                 fontsize=9,
-                color="#333333",
+                color="#2b2b2b",
+                fontweight="bold",
             )
         if (book_value is not None) or (base_case_pv is not None):
-            ax5.legend(loc="lower right")
+            ax5.legend(loc="lower right", frameon=False)
         ax5.grid(True, alpha=0.2, axis="x", linestyle="--")
         for spine in ("top", "right"):
             ax5.spines[spine].set_visible(False)
@@ -624,28 +635,30 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
                 positions,
                 values,
                 color=colors,
-                width=0.6,
-                alpha=0.9,
-                edgecolor="#333333",
-                linewidth=0.6,
-                zorder=2,
+                width=0.55,
+                alpha=0.95,
+                edgecolor="#f4f6fb",
+                linewidth=1.0,
+                zorder=3,
             )
             if book_value:
                 ax6.axhline(
                     book_value,
-                    color="black",
-                    linestyle="--",
-                    linewidth=1.8,
+                    color="#1f1f1f",
+                    linestyle=(0, (6, 4)),
+                    linewidth=1.6,
                     label="Book value",
-                    zorder=4,
+                    zorder=5,
                 )
             ax6.bar_label(
                 rects,
                 labels=[f"${val:,.0f}" for val in values],
-                padding=6,
+                padding=4,
                 fontsize=10,
-                color="#222222",
+                color="#1f1f1f",
                 fontweight="bold",
+                rotation=0,
+                label_type="edge",
             )
             ax6.set_ylabel("Present value ($)")
             ax6.set_title("Scenarios vs. Monte Carlo percentiles", fontweight="bold")
@@ -656,12 +669,13 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
             if book_value is not None:
                 candidate_values.append(book_value)
             max_reference = max(candidate_values)
-            ax6.set_ylim(0, max_reference * 1.05 if max_reference else 1)
-            ax6.grid(True, alpha=0.25, axis="y")
+            ax6.set_ylim(0, max_reference * 1.12 if max_reference else 1)
+            ax6.grid(True, alpha=0.2, axis="y", linestyle="--")
             ax6.set_axisbelow(True)
             for spine in ("top", "right"):
                 ax6.spines[spine].set_visible(False)
-            ax6.legend(loc="upper left")
+            ax6.spines["left"].set_alpha(0.6)
+            ax6.legend(loc="upper left", frameon=False)
         else:
             ax6.axis("off")
     else:

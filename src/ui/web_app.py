@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -30,33 +31,36 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _trigger_auto_download(zip_bytes: bytes, file_name: str, token: str) -> None:
-    """Inject a one-time auto-download script into the main Streamlit DOM."""
+    """Inject a one-time auto-download script into the parent Streamlit document."""
     encoded = base64.b64encode(zip_bytes).decode()
-    anchor_id = f"auto-download-{token}"
-    script = f"""
+    payload = f"""
+    <html>
+    <body>
     <script>
     (function() {{
         const token = {json.dumps(token)};
-        if (window.__streamlit_auto_download_token === token) {{
+        const parentWindow = window.parent;
+        if (!parentWindow) {{
             return;
         }}
-        const existing = document.getElementById({json.dumps(anchor_id)});
-        if (existing) {{
-            existing.remove();
+        if (parentWindow.__streamlit_auto_download_token === token) {{
+            return;
         }}
-        const link = document.createElement("a");
-        link.id = {json.dumps(anchor_id)};
+        const doc = parentWindow.document;
+        const link = doc.createElement("a");
         link.href = "data:application/zip;base64,{encoded}";
         link.download = {json.dumps(file_name)};
         link.style.display = "none";
-        document.body.appendChild(link);
+        doc.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
-        window.__streamlit_auto_download_token = token;
+        doc.body.removeChild(link);
+        parentWindow.__streamlit_auto_download_token = token;
     }})();
     </script>
+    </body>
+    </html>
     """
-    st.markdown(script, unsafe_allow_html=True)
+    components.html(payload, height=0, width=0)
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
