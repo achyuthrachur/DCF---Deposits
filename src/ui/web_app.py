@@ -1067,7 +1067,7 @@ def main() -> None:
             color: #ffffff;
         }
         .brand-badge {
-            position: fixed;
+            position: absolute;
             top: 70px;
             left: 30px;
             z-index: 1100;
