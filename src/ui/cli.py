@@ -242,7 +242,7 @@ def _print_parameter_summary(results: EngineResults) -> None:
         detail_lines.append(f"Calculated Annual Decay: {resolved_decay * 100:.2f}%")
         detail_lines.append(f"Calculated Monthly Decay: {monthly_decay * 100:.2f}%")
         detail_lines.append(
-            f"Deposit Betas ↑ {segment.get('deposit_beta_up'):.2f} | ↓ {segment.get('deposit_beta_down'):.2f}"
+            f"Deposit Betas up {segment.get('deposit_beta_up'):.2f} | down {segment.get('deposit_beta_down'):.2f}"
         )
         for line in detail_lines:
             console.print(f"  - {line}")
@@ -408,16 +408,16 @@ def _prompt_monte_carlo_config(
 
     console.print(
         "\n[bold]Monte Carlo Overview[/bold]\n"
-        "• [green]Level 1 – Static curve[/green]: keeps today’s discount curve fixed and only simulates the short-rate path used for deposit repricing.\n"
-        "• [green]Level 2 – Two-factor curve[/green]: simulates correlated 3M and 10Y anchors, rebuilds the curve each month, and discounts using that evolved curve."
+        "- [green]Level 1 - Static curve[/green]: keeps today's discount curve fixed and only simulates the short-rate path used for deposit repricing.\n"
+        "- [green]Level 2 - Two-factor curve[/green]: simulates correlated 3M and 10Y anchors, rebuilds the curve each month, and discounts using that evolved curve."
     )
 
     short_anchor = float(base_curve.get_rate(3)) if base_curve else 0.03
     long_anchor = float(base_curve.get_rate(120)) if base_curve else short_anchor
     console.print(
         f"\nBase curve anchors from Treasury data:\n"
-        f"  • 3M anchor: {short_anchor * 100:.2f}%\n"
-        f"  • 10Y anchor: {long_anchor * 100:.2f}%"
+        f"  - 3M anchor: {short_anchor * 100:.2f}%\n"
+        f"  - 10Y anchor: {long_anchor * 100:.2f}%"
     )
     console.print(
         "Mean reversion (a) controls how quickly simulated rates revert toward the anchor.\n"

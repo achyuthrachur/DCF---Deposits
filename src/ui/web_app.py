@@ -301,7 +301,7 @@ def _render_parameter_summary(results: "EngineResults") -> None:
         lines.append(f"Calculated Annual Decay: {resolved_decay * 100:.2f}%")
         lines.append(f"Calculated Monthly Decay: {monthly_decay * 100:.2f}%")
         lines.append(
-            f"Deposit Betas: Gåæ {segment.get('deposit_beta_up'):.2f} | Gåô {segment.get('deposit_beta_down'):.2f}"
+            f"Deposit Betas: up {segment.get('deposit_beta_up'):.2f} | down {segment.get('deposit_beta_down'):.2f}"
         )
         st.markdown("\n".join(f"- {item}" for item in lines))
         warning = segment.get("decay_warning")
@@ -317,7 +317,7 @@ def _render_parameter_summary(results: "EngineResults") -> None:
         )
         if not sample_table.empty:
             st.markdown("#### Deposit Cash Flow Schedule (Sample Months)")
-            st.dataframe(sample_table, use_container_width=True)
+            st.dataframe(sample_table, width='stretch')
 
 
 @st.cache_data(show_spinner=False)
@@ -513,13 +513,13 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 )
             elif wal_input is not None:
                 st.info(
-                    f"{segment}: WAL provided GåÆ derived annual decay "
+                    f"{segment}: WAL provided G-> derived annual decay "
                     f"{resolution.annual_decay_rate * 100:.2f}% "
                     f"(monthly {resolution.monthly_decay_rate * 100:.2f}%)."
                 )
             elif decay_input is not None:
                 st.info(
-                    f"{segment}: Decay rate provided GåÆ implied WAL "
+                    f"{segment}: Decay rate provided G-> implied WAL "
                     f"{resolution.wal_years:.2f} years "
                     f"(monthly {resolution.monthly_decay_rate * 100:.2f}%)."
                 )
@@ -816,7 +816,7 @@ def _render_invalid_rate_message(discount_method: str, details: str) -> None:
     detail_text = details.rstrip(".")
     st.error(
         "The selected parameters produced discount rates outside the supported "
-        "range (0%GÇô20%). "
+        "range (0%G->20%). "
         f"{detail_text}. "
         "Please adjust the curve inputs or reset them to the defaults below."
     )
@@ -866,9 +866,9 @@ def _render_shock_detail(results, scenario_id: str) -> None:
     delta_pct = shock_viz_data.get("delta_pct")
     if delta is not None:
         pct_display = f"{delta_pct * 100:+.2f}%" if delta_pct is not None else ""
-        metrics[1].metric("+ö vs Base", f"${delta:,.0f}", pct_display)
+        metrics[1].metric("+Change vs Base", f"${delta:,.0f}", pct_display)
     else:
-        metrics[1].metric("+ö vs Base", "N/A")
+        metrics[1].metric("+Change vs Base", "N/A")
 
     metrics[2].metric(
         "Max |Shock|",
@@ -968,15 +968,15 @@ def _render_monte_carlo_detail(results, scenario_id: str) -> None:
         delta = scenario_pv - base_pv
         pct = delta / base_pv if base_pv else None
         pct_display = f"{pct * 100:+.2f}%" if pct is not None else ""
-        metrics[1].metric("+ö vs Base", f"${delta:,.0f}", pct_display)
+        metrics[1].metric("+Change vs Base", f"${delta:,.0f}", pct_display)
     else:
-        metrics[1].metric("+ö vs Base", "N/A")
+        metrics[1].metric("+Change vs Base", "N/A")
 
     percentiles = viz_data.get("percentiles", {})
     if percentiles and percentiles.get("p5") is not None and percentiles.get("p95") is not None:
         metrics[2].metric(
             "Central 90% PV",
-            f"${percentiles['p5']:,.0f} GÇô ${percentiles['p95']:,.0f}",
+            f"${percentiles['p5']:,.0f} G-> ${percentiles['p95']:,.0f}",
         )
     else:
         metrics[2].metric("Central 90% PV", "N/A")
@@ -1015,12 +1015,12 @@ def _render_monte_carlo_detail(results, scenario_id: str) -> None:
     except Exception as exc:
         st.warning(
             f"Monte Carlo animation unavailable: {exc}",
-            icon="GÜán+Å",
+            icon="GRun Analysis",
         )
     else:
         st.plotly_chart(
             animation_fig,
-            use_container_width=True,
+            width='stretch',
             key=f"mc_animation_{scenario_id}",
         )
 
@@ -1569,7 +1569,7 @@ def main() -> None:
             key="fred_interpolation",
         )
         selected_interpolation = interpolation_method
-        if st.button("Fetch current curve", use_container_width=True):
+        if st.button("Fetch current curve", width='stretch'):
             if not fred_api_key:
                 st.error("FRED API key is required to fetch the Treasury curve.")
             else:

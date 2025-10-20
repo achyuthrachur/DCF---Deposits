@@ -134,7 +134,7 @@ def plot_shock_rate_paths(curve_df: pd.DataFrame, scenario_label: str) -> plt.Fi
         label="Shock reduction",
     )
 
-    ax.set_title(f"Rate Path Comparison – {scenario_label}", fontsize=14, fontweight="bold")
+    ax.set_title(f"Rate Path Comparison - {scenario_label}", fontsize=14, fontweight="bold")
     ax.set_xlabel("Projection Month")
     ax.set_ylabel("Interest Rate (%)")
     ax.legend(loc="best")
@@ -157,7 +157,7 @@ def plot_shock_magnitude(curve_df: pd.DataFrame, scenario_label: str) -> plt.Fig
         months, 0, shock_bps, where=shock_bps < 0, color="#f4cccc", alpha=0.5
     )
 
-    ax.set_title(f"Shock Magnitude Over Time – {scenario_label}", fontsize=13, fontweight="bold")
+    ax.set_title(f"Shock Magnitude Over Time - {scenario_label}", fontsize=13, fontweight="bold")
     ax.set_xlabel("Projection Month")
     ax.set_ylabel("Shock (basis points)")
     ax.grid(True, alpha=0.25)
@@ -235,7 +235,7 @@ def plot_shock_pv_delta(
         )
 
     if delta is not None:
-        annotation = f"Δ {delta:+,.0f}"
+        annotation = f"Delta {delta:+,.0f}"
         if delta_pct is not None:
             annotation += f" ({delta_pct * 100:+.2f}%)"
         ax.text(

@@ -610,6 +610,7 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
                 ax6.text(rect.get_x() + rect.get_width() / 2, val, f"${val:,.0f}", ha="center", va="bottom")
             ax6.set_ylabel("Present value ($)")
             ax6.set_title("Scenarios vs. Monte Carlo percentiles", fontweight="bold")
+            ax6.set_xticks(range(len(labels)))
             ax6.set_xticklabels(labels, rotation=15)
             ax6.yaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
             ax6.grid(True, alpha=0.3, axis="y")
@@ -651,6 +652,7 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
 
     fig.suptitle("Monte Carlo ALM Dashboard", fontsize=16, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.subplots_adjust(hspace=0.35, wspace=0.3)
     return fig
 
 
@@ -843,3 +845,9 @@ def save_figure(fig: plt.Figure, output_path: Path) -> Path:
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return output_path
+
+
+
+
+
+
