@@ -256,7 +256,7 @@ class InMemoryReportBuilder:
                 worksheet = writer.sheets[safe_name]
                 row_count, col_count = limited_frame.shape
                 if col_count > 0:
-                    worksheet.freeze_panes = worksheet.cell(row=2, column=1)
+                    worksheet.freeze_panes = worksheet["A2"]
                     last_row = row_count + 1 if row_count > 0 else 1
                     last_col_letter = get_column_letter(col_count)
                     worksheet.auto_filter.ref = f"A1:{last_col_letter}{last_row}"

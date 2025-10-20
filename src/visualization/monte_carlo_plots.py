@@ -570,13 +570,13 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         labels = [percentile_labels[s] for s in order if s in percentiles]
         values = [percentiles[s] for s in order if s in percentiles]
         y_pos = np.arange(len(values))
-        ax5.barh(y_pos, values, color="#4f81bd", alpha=0.75)
+        bars = ax5.barh(y_pos, values, color="#4f81bd", alpha=0.8, edgecolor="white", linewidth=0.6)
         ax5.set_yticks(y_pos)
         ax5.set_yticklabels(labels)
         if book_value is not None:
-            ax5.axvline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
+            ax5.axvline(book_value, color="black", linestyle="--", linewidth=1.8, label="Book value", zorder=5)
         if base_case_pv is not None:
-            ax5.axvline(base_case_pv, color="orange", linestyle=":", linewidth=2, label="Base case PV")
+            ax5.axvline(base_case_pv, color="orange", linestyle=":", linewidth=1.8, label="Base case PV", zorder=5)
         ax5.set_xlabel("Present value ($)")
         ax5.set_title("Percentile ladder", fontweight="bold")
         reference_values = list(values)
@@ -585,9 +585,25 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         if base_case_pv is not None:
             reference_values.append(base_case_pv)
         _format_currency_axis(ax5, reference_values, axis="x")
+        max_value = max(reference_values) if reference_values else 0
+        label_offset = max_value * 0.01
+        for rect, val in zip(bars, values):
+            y_center = rect.get_y() + rect.get_height() / 2
+            ax5.text(
+                val + label_offset,
+                y_center,
+                f"${val:,.0f}",
+                va="center",
+                ha="left",
+                fontsize=9,
+                color="#333333",
+            )
         if (book_value is not None) or (base_case_pv is not None):
             ax5.legend(loc="lower right")
         ax5.grid(True, alpha=0.2, axis="x", linestyle="--")
+        for spine in ("top", "right"):
+            ax5.spines[spine].set_visible(False)
+        ax5.set_axisbelow(True)
     else:
         ax5.axis("off")
 
@@ -603,18 +619,49 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         filtered = [(l, v, c) for l, v, c in bars if not np.isnan(v)]
         if filtered:
             labels, values, colors = zip(*filtered)
-            rects = ax6.bar(labels, values, color=colors, alpha=0.85, edgecolor="black")
+            positions = np.arange(len(labels))
+            rects = ax6.bar(
+                positions,
+                values,
+                color=colors,
+                width=0.6,
+                alpha=0.9,
+                edgecolor="#333333",
+                linewidth=0.6,
+                zorder=2,
+            )
             if book_value:
-                ax6.axhline(book_value, color="black", linestyle="--", linewidth=2, label="Book value")
-            for rect, val in zip(rects, values):
-                ax6.text(rect.get_x() + rect.get_width() / 2, val, f"${val:,.0f}", ha="center", va="bottom")
+                ax6.axhline(
+                    book_value,
+                    color="black",
+                    linestyle="--",
+                    linewidth=1.8,
+                    label="Book value",
+                    zorder=4,
+                )
+            ax6.bar_label(
+                rects,
+                labels=[f"${val:,.0f}" for val in values],
+                padding=6,
+                fontsize=10,
+                color="#222222",
+                fontweight="bold",
+            )
             ax6.set_ylabel("Present value ($)")
             ax6.set_title("Scenarios vs. Monte Carlo percentiles", fontweight="bold")
-            ax6.set_xticks(range(len(labels)))
-            ax6.set_xticklabels(labels, rotation=15)
+            ax6.set_xticks(positions)
+            ax6.set_xticklabels(labels, rotation=10)
             ax6.yaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
-            ax6.grid(True, alpha=0.3, axis="y")
-            ax6.legend(loc="best")
+            candidate_values = list(values)
+            if book_value is not None:
+                candidate_values.append(book_value)
+            max_reference = max(candidate_values)
+            ax6.set_ylim(0, max_reference * 1.05 if max_reference else 1)
+            ax6.grid(True, alpha=0.25, axis="y")
+            ax6.set_axisbelow(True)
+            for spine in ("top", "right"):
+                ax6.spines[spine].set_visible(False)
+            ax6.legend(loc="upper left")
         else:
             ax6.axis("off")
     else:

@@ -14,7 +14,6 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -31,26 +30,33 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _trigger_auto_download(zip_bytes: bytes, file_name: str, token: str) -> None:
-    """Inject a one-time auto-download script into the Streamlit front-end."""
+    """Inject a one-time auto-download script into the main Streamlit DOM."""
     encoded = base64.b64encode(zip_bytes).decode()
-    payload = f"""
-        <script>
-        (function() {{
-            const token = {json.dumps(token)};
-            if (window.__streamlit_auto_download_token === token) {{
-                return;
-            }}
-            const link = document.createElement('a');
-            link.href = "data:application/zip;base64,{encoded}";
-            link.download = {json.dumps(file_name)};
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            window.__streamlit_auto_download_token = token;
-        }})();
-        </script>
+    anchor_id = f"auto-download-{token}"
+    script = f"""
+    <script>
+    (function() {{
+        const token = {json.dumps(token)};
+        if (window.__streamlit_auto_download_token === token) {{
+            return;
+        }}
+        const existing = document.getElementById({json.dumps(anchor_id)});
+        if (existing) {{
+            existing.remove();
+        }}
+        const link = document.createElement("a");
+        link.id = {json.dumps(anchor_id)};
+        link.href = "data:application/zip;base64,{encoded}";
+        link.download = {json.dumps(file_name)};
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.__streamlit_auto_download_token = token;
+    }})();
+    </script>
     """
-    components.html(payload, height=0, width=0)
+    st.markdown(script, unsafe_allow_html=True)
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
