@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Streamlit web interface for the NMD ALM engine."""
 
 from __future__ import annotations
@@ -300,7 +301,7 @@ def _render_parameter_summary(results: "EngineResults") -> None:
         lines.append(f"Calculated Annual Decay: {resolved_decay * 100:.2f}%")
         lines.append(f"Calculated Monthly Decay: {monthly_decay * 100:.2f}%")
         lines.append(
-            f"Deposit Betas: ↑ {segment.get('deposit_beta_up'):.2f} | ↓ {segment.get('deposit_beta_down'):.2f}"
+            f"Deposit Betas: Gåæ {segment.get('deposit_beta_up'):.2f} | Gåô {segment.get('deposit_beta_down'):.2f}"
         )
         st.markdown("\n".join(f"- {item}" for item in lines))
         warning = segment.get("decay_warning")
@@ -512,13 +513,13 @@ def _prepare_assumption_inputs(segments: List[str]) -> Dict[str, Dict[str, float
                 )
             elif wal_input is not None:
                 st.info(
-                    f"{segment}: WAL provided → derived annual decay "
+                    f"{segment}: WAL provided GåÆ derived annual decay "
                     f"{resolution.annual_decay_rate * 100:.2f}% "
                     f"(monthly {resolution.monthly_decay_rate * 100:.2f}%)."
                 )
             elif decay_input is not None:
                 st.info(
-                    f"{segment}: Decay rate provided → implied WAL "
+                    f"{segment}: Decay rate provided GåÆ implied WAL "
                     f"{resolution.wal_years:.2f} years "
                     f"(monthly {resolution.monthly_decay_rate * 100:.2f}%)."
                 )
@@ -815,7 +816,7 @@ def _render_invalid_rate_message(discount_method: str, details: str) -> None:
     detail_text = details.rstrip(".")
     st.error(
         "The selected parameters produced discount rates outside the supported "
-        "range (0%–20%). "
+        "range (0%GÇô20%). "
         f"{detail_text}. "
         "Please adjust the curve inputs or reset them to the defaults below."
     )
@@ -865,9 +866,9 @@ def _render_shock_detail(results, scenario_id: str) -> None:
     delta_pct = shock_viz_data.get("delta_pct")
     if delta is not None:
         pct_display = f"{delta_pct * 100:+.2f}%" if delta_pct is not None else ""
-        metrics[1].metric("Δ vs Base", f"${delta:,.0f}", pct_display)
+        metrics[1].metric("+ö vs Base", f"${delta:,.0f}", pct_display)
     else:
-        metrics[1].metric("Δ vs Base", "N/A")
+        metrics[1].metric("+ö vs Base", "N/A")
 
     metrics[2].metric(
         "Max |Shock|",
@@ -967,15 +968,15 @@ def _render_monte_carlo_detail(results, scenario_id: str) -> None:
         delta = scenario_pv - base_pv
         pct = delta / base_pv if base_pv else None
         pct_display = f"{pct * 100:+.2f}%" if pct is not None else ""
-        metrics[1].metric("Δ vs Base", f"${delta:,.0f}", pct_display)
+        metrics[1].metric("+ö vs Base", f"${delta:,.0f}", pct_display)
     else:
-        metrics[1].metric("Δ vs Base", "N/A")
+        metrics[1].metric("+ö vs Base", "N/A")
 
     percentiles = viz_data.get("percentiles", {})
     if percentiles and percentiles.get("p5") is not None and percentiles.get("p95") is not None:
         metrics[2].metric(
             "Central 90% PV",
-            f"${percentiles['p5']:,.0f} – ${percentiles['p95']:,.0f}",
+            f"${percentiles['p5']:,.0f} GÇô ${percentiles['p95']:,.0f}",
         )
     else:
         metrics[2].metric("Central 90% PV", "N/A")
@@ -1014,7 +1015,7 @@ def _render_monte_carlo_detail(results, scenario_id: str) -> None:
     except Exception as exc:
         st.warning(
             f"Monte Carlo animation unavailable: {exc}",
-            icon="⚠️",
+            icon="GÜán+Å",
         )
     else:
         st.plotly_chart(
@@ -1667,6 +1668,82 @@ def main() -> None:
         selected_curve,
     )
 
+
+    st.markdown("### Step 4 - Output & Export Options")
+    default_export_opts = st.session_state.get(
+        "auto_export_options",
+        {
+            "enabled": True,
+            "export_cashflows": False,
+            "cashflow_mode": "sample",
+            "cashflow_sample_size": 20,
+            "include_animation": True,
+            "animation_format": "html",
+        },
+    )
+    auto_export_enabled = st.checkbox(
+        "Automatically export analysis artifacts after each run",
+        value=default_export_opts.get("enabled", True),
+        key="auto_export_enabled",
+    )
+    export_cashflows_toggle = st.checkbox(
+        "Include detailed cash flow CSVs in the export bundle",
+        value=default_export_opts.get("export_cashflows", False),
+        key="auto_export_cashflows",
+        disabled=not auto_export_enabled,
+    )
+    cashflow_mode_options = ["Sampled (top balances)", "Full detail"]
+    default_mode_index = (
+        0 if default_export_opts.get("cashflow_mode", "sample") == "sample" else 1
+    )
+    cashflow_mode_label = st.selectbox(
+        "Cash flow detail level",
+        cashflow_mode_options,
+        index=default_mode_index,
+        key="auto_export_cashflow_mode",
+        disabled=not (auto_export_enabled and export_cashflows_toggle),
+    )
+    cashflow_mode = "sample" if cashflow_mode_label.startswith("Sampled") else "full"
+    cashflow_sample_size = st.number_input(
+        "Cash flow sample size (accounts)",
+        min_value=5,
+        max_value=5000,
+        step=5,
+        value=int(default_export_opts.get("cashflow_sample_size", 20)),
+        key="auto_export_cashflow_sample_size",
+        disabled=not (
+            auto_export_enabled and export_cashflows_toggle and cashflow_mode == "sample"
+        ),
+    )
+    include_animation = st.checkbox(
+        "Export Monte Carlo rate-path animation",
+        value=default_export_opts.get("include_animation", True),
+        key="auto_export_include_animation",
+        disabled=not auto_export_enabled,
+    )
+    animation_format = st.selectbox(
+        "Animation export format",
+        ["html", "gif", "mp4"],
+        index=["html", "gif", "mp4"].index(
+            default_export_opts.get("animation_format", "html")
+        ),
+        key="auto_export_animation_format",
+        disabled=not (auto_export_enabled and include_animation),
+    )
+    export_root = Path("output") / "auto_exports"
+    if auto_export_enabled:
+        st.caption(
+            f"Exports will be written to `{export_root}` with a timestamped folder for each run."
+        )
+    st.session_state["auto_export_options"] = {
+        "enabled": auto_export_enabled,
+        "export_cashflows": export_cashflows_toggle,
+        "cashflow_mode": cashflow_mode,
+        "cashflow_sample_size": int(cashflow_sample_size),
+        "include_animation": include_animation,
+        "animation_format": animation_format,
+        "export_root": str(export_root),
+    }
     run_clicked = st.button("Run Analysis", type="primary")
 
     results = st.session_state.get("run_results")
@@ -1674,6 +1751,7 @@ def main() -> None:
     progress_text = None
 
     if run_clicked:
+        auto_export_opts = st.session_state.get("auto_export_options", {})
         engine = ALMEngine()
         try:
             engine.load_dataframe(
@@ -1744,6 +1822,74 @@ def main() -> None:
                     max_projection_months=int(max_projection_months),
                     progress_callback=progress_callback,
                 )
+            if auto_export_opts.get("enabled", False):
+                try:
+                    try:
+                        discount_config_obj = engine.discount_configuration()
+                    except Exception:
+                        discount_config_obj = None
+                    analysis_metadata = {
+                        "run_timestamp": datetime.utcnow().isoformat(),
+                        "segmentation_method": engine.segmentation_method,
+                        "projection_settings": {
+                            "base_months": int(projection_months),
+                            "max_months": int(max_projection_months),
+                            "materiality_threshold": float(materiality_threshold),
+                        },
+                        "scenario_flags": scenario_flags,
+                        "monte_carlo_config": (
+                            monte_carlo_config.to_metadata()
+                            if isinstance(monte_carlo_config, MonteCarloConfig)
+                            else None
+                        ),
+                        "assumptions": assumptions,
+                        "field_map": st.session_state.get("field_map", {}),
+                        "discount_selection": discount_config,
+                        "base_market_path": base_market_path,
+                        "auto_export_options": auto_export_opts,
+                    }
+                    try:
+                        analysis_metadata["portfolio"] = {
+                            "account_count": len(engine.accounts),
+                            "total_balance": float(sum(acc.balance for acc in engine.accounts)),
+                        }
+                    except Exception:
+                        pass
+                    if selected_curve:
+                        analysis_metadata["selected_curve"] = {
+                            "tenors": [int(t) for t in selected_curve.tenors],
+                            "rates": [float(r) for r in selected_curve.rates],
+                            "interpolation": selected_curve.interpolation_method,
+                        }
+                    reporter = ReportGenerator(
+                        auto_export_opts.get("export_root", "output/auto_exports"),
+                        timestamped=True,
+                    )
+                    export_bundle = reporter.export_analysis_bundle(
+                        results,
+                        discount_config=discount_config_obj,
+                        analysis_metadata=analysis_metadata,
+                        export_cashflows=auto_export_opts.get("export_cashflows", False),
+                        cashflow_mode=auto_export_opts.get("cashflow_mode", "sample"),
+                        cashflow_sample_size=int(auto_export_opts.get("cashflow_sample_size", 20)),
+                        cashflow_random_state=42,
+                        include_animation=auto_export_opts.get("include_animation", True),
+                        animation_format=auto_export_opts.get("animation_format", "html"),
+                    )
+                    st.session_state["latest_export"] = {
+                        "output_dir": str(export_bundle["output_dir"]),
+                        "archive": str(export_bundle.get("archive"))
+                        if export_bundle.get("archive")
+                        else None,
+                        "files": [str(path) for path in export_bundle.get("files", [])],
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }
+                    st.success(
+                        f"Analysis artifacts saved to `{st.session_state['latest_export']['output_dir']}`."
+                    )
+                except Exception as export_exc:
+                    LOGGER.warning("Auto-export failed: %s", export_exc)
+                    st.session_state["latest_export_error"] = str(export_exc)
         except ValueError as exc:
             message = str(exc)
             if "Invalid rate(s) detected" in message:
@@ -1766,14 +1912,41 @@ def main() -> None:
         if progress_text and progress_bar:
             progress_text.markdown("**Preparing visualisations...**")
             progress_bar.progress(80)
-    else:
-        if results is None:
-            st.info("Configure inputs and click **Run Analysis** to generate results.")
-            return
-        else:
-            st.caption(
-                "Displaying previously generated visualisations. Run the analysis again to refresh."
-            )
+    results = st.session_state.get("run_results")
+    export_info = st.session_state.get("latest_export")
+    export_error = st.session_state.pop("latest_export_error", None)
+    if export_info:
+        st.markdown("#### Latest Export Bundle")
+        st.caption(f"Artifacts saved to `{export_info['output_dir']}`.")
+        archive_path_str = export_info.get("archive")
+        if archive_path_str:
+            archive_path = Path(archive_path_str)
+            if archive_path.exists():
+                try:
+                    archive_bytes = archive_path.read_bytes()
+                    st.download_button(
+                        "Download analysis bundle",
+                        data=archive_bytes,
+                        file_name=archive_path.name,
+                        mime="application/zip",
+                        key=f"download_bundle_{export_info['timestamp']}",
+                    )
+                except Exception as exc:  # pragma: no cover
+                    LOGGER.warning("Unable to provide archive download: %s", exc)
+        if export_info.get("files"):
+            with st.expander("View exported artifact list", expanded=False):
+                for path_str in export_info["files"]:
+                    st.write(path_str)
+    elif export_error:
+        st.warning(f"Auto-export encountered an issue: {export_error}")
+
+    if results is None:
+        st.info("Configure inputs and click **Run Analysis** to generate results.")
+        return
+    if not run_clicked:
+        st.caption(
+            "Displaying previously generated visualisations. Run the analysis again to refresh."
+        )
 
     _render_parameter_summary(results)
 

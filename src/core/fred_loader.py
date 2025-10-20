@@ -9,6 +9,8 @@ import logging
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 try:
     from fredapi import Fred
@@ -46,7 +48,16 @@ class FREDYieldCurveLoader:
         self.api_key = api_key
         self._session = requests.Session()
         self._session.params = {"api_key": api_key, "file_type": "json"}
-        self._request_timeout = 10.0
+        retries = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",),
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+        self._request_timeout: Tuple[float, float] = (3.0, 15.0)
 
     @classmethod
     def _make_cache_key(
