@@ -1067,12 +1067,44 @@ class ALMEngine:
                 except Exception:  # pragma: no cover
                     pass
 
+        expected_principal = principal_sum / config.num_simulations
+        expected_interest = interest_sum / config.num_simulations
+        expected_total = total_sum / config.num_simulations
+
+        starting_balance = float(sum(account.balance for account in self.accounts))
+        expected_beginning = np.zeros(months, dtype=float)
+        expected_ending = np.zeros(months, dtype=float)
+        expected_decay_rate = np.zeros(months, dtype=float)
+        balance_tracker = starting_balance
+        for idx in range(months):
+            expected_beginning[idx] = balance_tracker
+            principal_amount = expected_principal[idx]
+            balance_tracker = max(balance_tracker - principal_amount, 0.0)
+            expected_ending[idx] = balance_tracker
+            expected_decay_rate[idx] = (
+                principal_amount / expected_beginning[idx]
+                if expected_beginning[idx] > 0
+                else 0.0
+            )
+
+        expected_deposit_rates = np.zeros(months, dtype=float)
+        for idx in range(months):
+            begin_balance = expected_beginning[idx]
+            if begin_balance > 0:
+                expected_deposit_rates[idx] = (expected_interest[idx] * 12) / begin_balance
+            else:
+                expected_deposit_rates[idx] = 0.0
+
         expected_cashflows = pd.DataFrame(
             {
                 "month": months_range,
-                "expected_principal": principal_sum / config.num_simulations,
-                "expected_interest": interest_sum / config.num_simulations,
-                "expected_total": total_sum / config.num_simulations,
+                "beginning_balance": expected_beginning,
+                "ending_balance": expected_ending,
+                "principal": expected_principal,
+                "interest": expected_interest,
+                "total_cash_flow": expected_total,
+                "deposit_rate": expected_deposit_rates,
+                "monthly_decay_rate": expected_decay_rate,
             }
         )
 
@@ -1177,8 +1209,13 @@ class ALMEngine:
 
         actual_projection_months = int(expected_cashflows["month"].max()) if not expected_cashflows.empty else 0
         residual_balance = None
-        if actual_projection_months > 0:
-            last_month_cf = expected_cashflows[expected_cashflows["month"] == actual_projection_months]
+        if (
+            actual_projection_months > 0
+            and "ending_balance" in expected_cashflows.columns
+        ):
+            last_month_cf = expected_cashflows[
+                expected_cashflows["month"] == actual_projection_months
+            ]
             residual_balance = float(last_month_cf["ending_balance"].sum())
 
         summary_metadata = {
