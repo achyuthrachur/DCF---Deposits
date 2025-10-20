@@ -12,7 +12,7 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 - One-click Treasury curve downloads from the FRED API or manual tenor entry.
 - Scenario generation for parallel/non-parallel curve shocks plus Monte Carlo simulations with configurable volatility and drift.
 - Account-level cash flow projection, terminal value capture, and present value calculation.
-- CSV/JSON report exports (scenario summary, discount curve snapshot, cash flow detail, account-level PV) with optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
+- Download packages combining Excel workbooks, Word narrative reports, and charts (served as a zip in Streamlit; legacy CSV exports remain available via the CLI) plus optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
 
 ## Getting Started
 1. Install dependencies:
@@ -20,7 +20,7 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 src/
 |-- core/          # Calculation engines (cash flows, PV, scenarios)
 |-- models/        # Pydantic models for accounts, assumptions, scenarios, results
-|-- reporting/     # CSV export helpers
+|-- reporting/     # Disk exports and in-memory download bundler
 |-- ui/            # Typer CLI for manual data entry
 ```
 
@@ -41,8 +41,9 @@ The CLI will guide you through:
 4. Configuring discount rates and market scenarios.
 
 After execution the CLI exports reports to the `output/` directory.  
-The web app renders results in-browser and provides download buttons for summary,
-cashflow, and account-level PV CSVs.
+The web app renders results in-browser and automatically launches a zip download
+containing the Excel workbook, Word narrative, and packaged charts; you can also trigger
+the download again from within the app if needed.
 
 ### Yield Curve Sources
 - **Single rate** - retains backwards compatibility for quick what-if analysis.

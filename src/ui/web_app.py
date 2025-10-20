@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import sys
 import os
-from datetime import date
-from base64 import b64encode
+import logging
+import base64
+import json
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +27,30 @@ st.cache_data.clear()
 st.cache_resource.clear()
 
 REPO_ROOT = PROJECT_ROOT.parent
+LOGGER = logging.getLogger(__name__)
+
+
+def _trigger_auto_download(zip_bytes: bytes, file_name: str, token: str) -> None:
+    """Inject a one-time auto-download script into the Streamlit front-end."""
+    encoded = base64.b64encode(zip_bytes).decode()
+    payload = f"""
+        <script>
+        (function() {{
+            const token = {json.dumps(token)};
+            if (window.__streamlit_auto_download_token === token) {{
+                return;
+            }}
+            const link = document.createElement('a');
+            link.href = "data:application/zip;base64,{encoded}";
+            link.download = {json.dumps(file_name)};
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.__streamlit_auto_download_token = token;
+        }})();
+        </script>
+    """
+    components.html(payload, height=0, width=0)
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
@@ -31,6 +58,7 @@ from src.core.fred_loader import FREDYieldCurveLoader
 from src.core.yield_curve import YieldCurve
 from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
 from src.core.decay import resolve_decay_parameters
+from src.reporting import InMemoryReportBuilder
 from src.visualization import (
     create_monte_carlo_dashboard,
     create_rate_path_animation,
@@ -116,18 +144,6 @@ SCENARIO_OPTIONS = [
     ("flattener", "Curve flattener (short up, long down)", False),
     ("short_shock_up", "Short-rate shock up (+200 bps front-end)", False),
 ]
-DEFAULT_SINGLE_RATE = 0.035
-DEFAULT_MANUAL_TENOR_RATES: Dict[int, float] = {
-    3: 0.0300,
-    6: 0.0310,
-    12: 0.0325,
-    24: 0.0335,
-    36: 0.0350,
-    60: 0.0365,
-    84: 0.0380,
-    120: 0.0400,
-}
-
 
 TENOR_LABELS: List[Tuple[int, str]] = [
     (3, "3 Months"),
@@ -1105,7 +1121,7 @@ def main() -> None:
         .hero-card p {
             font-size: 1.05rem;
             line-height: 1.6;
-            color: #e9f0ff;
+            color: #f3f7ff;
             margin-bottom: 24px;
         }
         .accent-line {
@@ -1174,7 +1190,7 @@ def main() -> None:
         .info-card p {
             font-size: 0.95rem;
             line-height: 1.5;
-            color: #f2f6ff;
+            color: #eef4ff;
             margin: 0;
         }
         .stApp label,
@@ -1191,7 +1207,7 @@ def main() -> None:
         .stApp [data-testid="stSelectbox"] div p,
         .stApp [data-testid="stExpander"] button p,
         .stApp [data-testid="stExpander"] button span {
-            color: #f6f9ff !important;
+            color: #eef3ff !important;
         }
         .stApp .stNumberInput input,
         .stApp .stTextInput input,
@@ -1669,39 +1685,37 @@ def main() -> None:
     )
 
 
-    st.markdown("### Step 4 - Output & Export Options")
-    default_export_opts = st.session_state.get(
-        "auto_export_options",
+    st.markdown("### Step 4 - Download Package Options")
+    default_package_opts = st.session_state.get(
+        "download_package_options",
         {
             "enabled": True,
             "export_cashflows": False,
             "cashflow_mode": "sample",
             "cashflow_sample_size": 20,
-            "include_animation": True,
-            "animation_format": "html",
         },
     )
-    auto_export_enabled = st.checkbox(
-        "Automatically export analysis artifacts after each run",
-        value=default_export_opts.get("enabled", True),
-        key="auto_export_enabled",
+    package_enabled = st.checkbox(
+        "Build a downloadable zip (Excel + Word) after each run",
+        value=default_package_opts.get("enabled", True),
+        key="download_package_enabled",
     )
     export_cashflows_toggle = st.checkbox(
-        "Include detailed cash flow CSVs in the export bundle",
-        value=default_export_opts.get("export_cashflows", False),
-        key="auto_export_cashflows",
-        disabled=not auto_export_enabled,
+        "Embed cash flow detail in the Excel workbook",
+        value=default_package_opts.get("export_cashflows", False),
+        key="download_package_cashflows",
+        disabled=not package_enabled,
     )
     cashflow_mode_options = ["Sampled (top balances)", "Full detail"]
     default_mode_index = (
-        0 if default_export_opts.get("cashflow_mode", "sample") == "sample" else 1
+        0 if default_package_opts.get("cashflow_mode", "sample") == "sample" else 1
     )
     cashflow_mode_label = st.selectbox(
         "Cash flow detail level",
         cashflow_mode_options,
         index=default_mode_index,
-        key="auto_export_cashflow_mode",
-        disabled=not (auto_export_enabled and export_cashflows_toggle),
+        key="download_package_cashflow_mode",
+        disabled=not (package_enabled and export_cashflows_toggle),
     )
     cashflow_mode = "sample" if cashflow_mode_label.startswith("Sampled") else "full"
     cashflow_sample_size = st.number_input(
@@ -1709,40 +1723,24 @@ def main() -> None:
         min_value=5,
         max_value=5000,
         step=5,
-        value=int(default_export_opts.get("cashflow_sample_size", 20)),
-        key="auto_export_cashflow_sample_size",
+        value=int(default_package_opts.get("cashflow_sample_size", 20)),
+        key="download_package_cashflow_sample_size",
         disabled=not (
-            auto_export_enabled and export_cashflows_toggle and cashflow_mode == "sample"
+            package_enabled and export_cashflows_toggle and cashflow_mode == "sample"
         ),
     )
-    include_animation = st.checkbox(
-        "Export Monte Carlo rate-path animation",
-        value=default_export_opts.get("include_animation", True),
-        key="auto_export_include_animation",
-        disabled=not auto_export_enabled,
-    )
-    animation_format = st.selectbox(
-        "Animation export format",
-        ["html", "gif", "mp4"],
-        index=["html", "gif", "mp4"].index(
-            default_export_opts.get("animation_format", "html")
-        ),
-        key="auto_export_animation_format",
-        disabled=not (auto_export_enabled and include_animation),
-    )
-    export_root = Path("output") / "auto_exports"
-    if auto_export_enabled:
+    if package_enabled:
         st.caption(
-            f"Exports will be written to `{export_root}` with a timestamped folder for each run."
+            "A zip download (Excel workbook + Word report + charts) will launch automatically "
+            "after each successful run. Save it locally before the session idles."
         )
-    st.session_state["auto_export_options"] = {
-        "enabled": auto_export_enabled,
+    else:
+        st.caption("Disable the automatic download if you only want to explore results in-app.")
+    st.session_state["download_package_options"] = {
+        "enabled": package_enabled,
         "export_cashflows": export_cashflows_toggle,
         "cashflow_mode": cashflow_mode,
         "cashflow_sample_size": int(cashflow_sample_size),
-        "include_animation": include_animation,
-        "animation_format": animation_format,
-        "export_root": str(export_root),
     }
     run_clicked = st.button("Run Analysis", type="primary")
 
@@ -1751,7 +1749,7 @@ def main() -> None:
     progress_text = None
 
     if run_clicked:
-        auto_export_opts = st.session_state.get("auto_export_options", {})
+        package_opts = st.session_state.get("download_package_options", {})
         engine = ALMEngine()
         try:
             engine.load_dataframe(
@@ -1822,7 +1820,7 @@ def main() -> None:
                     max_projection_months=int(max_projection_months),
                     progress_callback=progress_callback,
                 )
-            if auto_export_opts.get("enabled", False):
+            if package_opts.get("enabled", False):
                 try:
                     try:
                         discount_config_obj = engine.discount_configuration()
@@ -1846,7 +1844,7 @@ def main() -> None:
                         "field_map": st.session_state.get("field_map", {}),
                         "discount_selection": discount_config,
                         "base_market_path": base_market_path,
-                        "auto_export_options": auto_export_opts,
+                        "download_package_options": package_opts,
                     }
                     try:
                         analysis_metadata["portfolio"] = {
@@ -1861,35 +1859,31 @@ def main() -> None:
                             "rates": [float(r) for r in selected_curve.rates],
                             "interpolation": selected_curve.interpolation_method,
                         }
-                    reporter = ReportGenerator(
-                        auto_export_opts.get("export_root", "output/auto_exports"),
-                        timestamped=True,
-                    )
-                    export_bundle = reporter.export_analysis_bundle(
+                    builder = InMemoryReportBuilder(base_title="Deposit Analysis")
+                    bundle = builder.build(
                         results,
                         discount_config=discount_config_obj,
                         analysis_metadata=analysis_metadata,
-                        export_cashflows=auto_export_opts.get("export_cashflows", False),
-                        cashflow_mode=auto_export_opts.get("cashflow_mode", "sample"),
-                        cashflow_sample_size=int(auto_export_opts.get("cashflow_sample_size", 20)),
+                        export_cashflows=package_opts.get("export_cashflows", False),
+                        cashflow_mode=package_opts.get("cashflow_mode", "sample"),
+                        cashflow_sample_size=int(package_opts.get("cashflow_sample_size", 20)),
                         cashflow_random_state=42,
-                        include_animation=auto_export_opts.get("include_animation", True),
-                        animation_format=auto_export_opts.get("animation_format", "html"),
                     )
-                    st.session_state["latest_export"] = {
-                        "output_dir": str(export_bundle["output_dir"]),
-                        "archive": str(export_bundle.get("archive"))
-                        if export_bundle.get("archive")
-                        else None,
-                        "files": [str(path) for path in export_bundle.get("files", [])],
-                        "timestamp": datetime.utcnow().isoformat(),
+                    st.session_state["latest_bundle"] = {
+                        "zip_bytes": bundle.zip_bytes,
+                        "zip_name": bundle.zip_name,
+                        "excel_name": bundle.excel_name,
+                        "word_name": bundle.word_name,
+                        "manifest": bundle.manifest,
+                        "token": bundle.created_at.isoformat(),
                     }
+                    st.session_state.pop("latest_bundle_error", None)
                     st.success(
-                        f"Analysis artifacts saved to `{st.session_state['latest_export']['output_dir']}`."
+                        "Download package ready. Your browser should start the download automatically."
                     )
-                except Exception as export_exc:
-                    LOGGER.warning("Auto-export failed: %s", export_exc)
-                    st.session_state["latest_export_error"] = str(export_exc)
+                except Exception as bundle_exc:
+                    LOGGER.warning("Download packaging failed: %s", bundle_exc)
+                    st.session_state["latest_bundle_error"] = str(bundle_exc)
         except ValueError as exc:
             message = str(exc)
             if "Invalid rate(s) detected" in message:
@@ -1913,32 +1907,35 @@ def main() -> None:
             progress_text.markdown("**Preparing visualisations...**")
             progress_bar.progress(80)
     results = st.session_state.get("run_results")
-    export_info = st.session_state.get("latest_export")
-    export_error = st.session_state.pop("latest_export_error", None)
-    if export_info:
-        st.markdown("#### Latest Export Bundle")
-        st.caption(f"Artifacts saved to `{export_info['output_dir']}`.")
-        archive_path_str = export_info.get("archive")
-        if archive_path_str:
-            archive_path = Path(archive_path_str)
-            if archive_path.exists():
-                try:
-                    archive_bytes = archive_path.read_bytes()
-                    st.download_button(
-                        "Download analysis bundle",
-                        data=archive_bytes,
-                        file_name=archive_path.name,
-                        mime="application/zip",
-                        key=f"download_bundle_{export_info['timestamp']}",
-                    )
-                except Exception as exc:  # pragma: no cover
-                    LOGGER.warning("Unable to provide archive download: %s", exc)
-        if export_info.get("files"):
-            with st.expander("View exported artifact list", expanded=False):
-                for path_str in export_info["files"]:
-                    st.write(path_str)
-    elif export_error:
-        st.warning(f"Auto-export encountered an issue: {export_error}")
+    bundle_info = st.session_state.get("latest_bundle")
+    bundle_error = st.session_state.pop("latest_bundle_error", None)
+    if bundle_info:
+        st.markdown("#### Latest Download Package")
+        st.caption(
+            "The package includes the Excel workbook, Word narrative, and supporting charts. "
+            "Save the downloaded zip locally to retain the run."
+        )
+        token = bundle_info.get("token")
+        zip_bytes = bundle_info.get("zip_bytes")
+        zip_name = bundle_info.get("zip_name")
+        if token and zip_bytes and zip_name:
+            if st.session_state.get("auto_download_last_token") != token:
+                _trigger_auto_download(zip_bytes, zip_name, token)
+                st.session_state["auto_download_last_token"] = token
+            st.download_button(
+                "Download again",
+                data=zip_bytes,
+                file_name=zip_name,
+                mime="application/zip",
+                key=f"download_bundle_{token}",
+            )
+        manifest = bundle_info.get("manifest", {})
+        if manifest:
+            with st.expander("Package contents", expanded=False):
+                for path_str, description in manifest.items():
+                    st.write(f"**{path_str}** - {description}")
+    elif bundle_error:
+        st.warning(f"Automatic download encountered an issue: {bundle_error}")
 
     if results is None:
         st.info("Configure inputs and click **Run Analysis** to generate results.")
@@ -2014,6 +2011,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
 
 
 

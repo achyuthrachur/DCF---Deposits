@@ -5,13 +5,17 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 
 from ..models.results import EngineResults
 from ..visualization import (
@@ -98,34 +102,28 @@ class ReportGenerator:
             output[key] = path
         return output
 
-    def _export_shock_visuals(
-        self,
+    @staticmethod
+    def _build_shock_figures(
         results: EngineResults,
         scenario_id: str,
-        scenario_dir: Path,
-    ) -> Dict[str, Path]:
-        """Generate deterministic shock figures."""
+    ) -> Dict[str, Figure]:
+        """Prepare deterministic shock figures in memory."""
         data = extract_shock_data(results, scenario_id)
         if not data:
             return {}
 
-        output: Dict[str, Path] = {}
+        figures: Dict[str, Figure] = {}
         label = data["scenario_label"]
         curve_df = data["curve_comparison"]
         tenor_df = data.get("tenor_comparison")
 
         try:
-            fig = plot_shock_rate_paths(curve_df, label)
-            output["rate_paths"] = save_figure(fig, scenario_dir / "shock_rate_paths.png")
-
-            fig = plot_shock_magnitude(curve_df, label)
-            output["shock_magnitude"] = save_figure(fig, scenario_dir / "shock_magnitude.png")
+            figures["rate_paths"] = plot_shock_rate_paths(curve_df, label)
+            figures["shock_magnitude"] = plot_shock_magnitude(curve_df, label)
 
             tenor_fig = plot_shock_tenor_comparison(tenor_df, label)
             if tenor_fig is not None:
-                output["tenor_comparison"] = save_figure(
-                    tenor_fig, scenario_dir / "shock_tenor_comparison.png"
-                )
+                figures["tenor_comparison"] = tenor_fig
 
             pv_fig = plot_shock_pv_delta(
                 data.get("base_pv"),
@@ -135,9 +133,47 @@ class ReportGenerator:
                 data.get("delta_pct"),
             )
             if pv_fig is not None:
-                output["pv_delta"] = save_figure(pv_fig, scenario_dir / "shock_pv_delta.png")
+                figures["pv_delta"] = pv_fig
         except Exception as exc:  # pragma: no cover - visualisations are best effort
-            LOGGER.warning("Failed to export shock visuals for %s: %s", scenario_id, exc)
+            LOGGER.warning("Failed to prepare shock visuals for %s: %s", scenario_id, exc)
+            for fig in figures.values():
+                plt.close(fig)
+            return {}
+
+        return figures
+
+    def _export_shock_visuals(
+        self,
+        results: EngineResults,
+        scenario_id: str,
+        scenario_dir: Path,
+    ) -> Dict[str, Path]:
+        """Generate deterministic shock figures."""
+        figures = self._build_shock_figures(results, scenario_id)
+        if not figures:
+            return {}
+
+        output: Dict[str, Path] = {}
+        try:
+            if "rate_paths" in figures:
+                output["rate_paths"] = save_figure(
+                    figures["rate_paths"], scenario_dir / "shock_rate_paths.png"
+                )
+            if "shock_magnitude" in figures:
+                output["shock_magnitude"] = save_figure(
+                    figures["shock_magnitude"], scenario_dir / "shock_magnitude.png"
+                )
+            if "tenor_comparison" in figures:
+                output["tenor_comparison"] = save_figure(
+                    figures["tenor_comparison"], scenario_dir / "shock_tenor_comparison.png"
+                )
+            if "pv_delta" in figures:
+                output["pv_delta"] = save_figure(
+                    figures["pv_delta"], scenario_dir / "shock_pv_delta.png"
+                )
+        finally:
+            for fig in figures.values():
+                plt.close(fig)
 
         return output
 
@@ -295,54 +331,64 @@ class ReportGenerator:
             output["config"] = config_path
         return output
 
+    @staticmethod
+    def _build_monte_carlo_figures(
+        results: EngineResults,
+        scenario_id: str = "monte_carlo",
+        prefix: str = "monte_carlo",
+    ) -> Dict[str, Figure]:
+        data = extract_monte_carlo_data(results, scenario_id=scenario_id)
+        if not data:
+            return {}
+
+        figures: Dict[str, Figure] = {}
+        try:
+            figures[f"{prefix}_rate_spaghetti"] = plot_rate_path_spaghetti(
+                data["rate_sample"], data["rate_summary"]
+            )
+            figures[f"{prefix}_rate_fan"] = plot_rate_confidence_fan(data["rate_summary"])
+            figures[f"{prefix}_pv_distribution"] = plot_portfolio_pv_distribution(
+                data["pv_distribution"],
+                book_value=data.get("book_value"),
+                base_case_pv=data.get("base_case_pv"),
+                percentiles=data.get("percentiles"),
+            )
+            figures[f"{prefix}_percentiles"] = plot_percentile_ladder(
+                data.get("percentiles", {}),
+                book_value=data.get("book_value"),
+                base_case_pv=data.get("base_case_pv"),
+            )
+            figures[f"{prefix}_dashboard"] = create_monte_carlo_dashboard(data)
+        except Exception as exc:  # pragma: no cover - visual generation best effort
+            LOGGER.warning("Failed to prepare Monte Carlo visuals: %s", exc)
+            for fig in figures.values():
+                plt.close(fig)
+            return {}
+
+        return figures
+
     def export_monte_carlo_visuals(
         self,
         results: EngineResults,
         scenario_id: str = "monte_carlo",
         prefix: str = "monte_carlo",
     ) -> Dict[str, Path]:
-        data = extract_monte_carlo_data(results, scenario_id=scenario_id)
-        if not data:
+        figures = self._build_monte_carlo_figures(results, scenario_id=scenario_id, prefix=prefix)
+        if not figures:
             return {}
+
         output_paths: Dict[str, Path] = {}
         directory = self.output_dir / "monte_carlo" / "figures"
         directory.mkdir(parents=True, exist_ok=True)
         try:
-            fig = plot_rate_path_spaghetti(data["rate_sample"], data["rate_summary"])
-            output_paths["rate_spaghetti"] = save_figure(
-                fig, directory / f"{prefix}_rate_spaghetti.png"
-            )
-
-            fig = plot_rate_confidence_fan(data["rate_summary"])
-            output_paths["rate_fan"] = save_figure(
-                fig, directory / f"{prefix}_rate_fan.png"
-            )
-
-            fig = plot_portfolio_pv_distribution(
-                data["pv_distribution"],
-                book_value=data.get("book_value"),
-                base_case_pv=data.get("base_case_pv"),
-                percentiles=data.get("percentiles"),
-            )
-            output_paths["pv_distribution"] = save_figure(
-                fig, directory / f"{prefix}_pv_distribution.png"
-            )
-
-            fig = plot_percentile_ladder(
-                data.get("percentiles", {}),
-                book_value=data.get("book_value"),
-                base_case_pv=data.get("base_case_pv"),
-            )
-            output_paths["pv_percentiles"] = save_figure(
-                fig, directory / f"{prefix}_percentiles.png"
-            )
-
-            fig = create_monte_carlo_dashboard(data)
-            output_paths["dashboard"] = save_figure(
-                fig, directory / f"{prefix}_dashboard.png"
-            )
-        except Exception as exc:  # pragma: no cover - visual generation is best-effort
-            LOGGER.warning("Failed to export Monte Carlo visualisations: %s", exc)
+            for key, figure in figures.items():
+                cleaned_key = key.replace(f"{prefix}_", "")
+                output_paths[cleaned_key] = save_figure(
+                    figure, directory / f"{prefix}_{cleaned_key}.png"
+                )
+        finally:
+            for fig in figures.values():
+                plt.close(fig)
         return output_paths
 
     # ----------------------------------------------------------- comprehensive
