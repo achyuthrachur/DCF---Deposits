@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from docx import Document
 from docx.shared import Inches
+from openpyxl.utils import get_column_letter
 
 from .report_generator import ReportGenerator
 from ..models.results import EngineResults
@@ -239,7 +240,7 @@ class InMemoryReportBuilder:
     def _build_excel_workbook(self, sheet_frames: Dict[str, pd.DataFrame]) -> bytes:
         buffer = io.BytesIO()
         used_names: Set[str] = set()
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             for name, frame in sheet_frames.items():
                 if frame is None or frame.empty:
                     continue
@@ -254,13 +255,16 @@ class InMemoryReportBuilder:
                 limited_frame.to_excel(writer, sheet_name=safe_name, index=False)
                 worksheet = writer.sheets[safe_name]
                 row_count, col_count = limited_frame.shape
-                if row_count > 0:
-                    worksheet.freeze_panes(1, 0)
-                    worksheet.autofilter(0, 0, row_count, max(col_count - 1, 0))
-                for col_idx, column in enumerate(limited_frame.columns):
-                    sample = limited_frame[column].head(200)
-                    max_len = max([len(str(column))] + [len(str(item)) for item in sample])
-                    worksheet.set_column(col_idx, col_idx, min(max_len + 2, 60))
+                if col_count > 0:
+                    worksheet.freeze_panes = worksheet.cell(row=2, column=1)
+                    last_row = row_count + 1 if row_count > 0 else 1
+                    last_col_letter = get_column_letter(col_count)
+                    worksheet.auto_filter.ref = f"A1:{last_col_letter}{last_row}"
+                    for col_idx, column in enumerate(limited_frame.columns, start=1):
+                        sample = limited_frame[column].head(200)
+                        max_len = max([len(str(column))] + [len(str(item)) for item in sample])
+                        column_letter = get_column_letter(col_idx)
+                        worksheet.column_dimensions[column_letter].width = min(max_len + 2, 60)
         buffer.seek(0)
         return buffer.getvalue()
 
