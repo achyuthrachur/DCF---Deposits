@@ -1068,8 +1068,8 @@ def main() -> None:
         }
         .brand-badge {
             position: absolute;
-            top: 70px;
-            left: 30px;
+            top: 30px;
+            left: 32px;
             z-index: 1100;
             padding: 6px 10px;
         }
@@ -1083,6 +1083,9 @@ def main() -> None:
             height: auto;
             display: block;
             filter: drop-shadow(0 6px 12px rgba(0,0,0,0.35));
+        }
+        .main .block-container {
+            padding-top: 140px;
         }
         .hero-card {
             background: rgba(19, 63, 127, 0.70);
