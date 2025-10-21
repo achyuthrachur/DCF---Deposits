@@ -755,6 +755,10 @@ class ALMEngine:
                     extra_tables=extra_tables,
                 )
                 current_step += scenario_steps
+                emit_progress(
+                    current_step,
+                    f"Scenario {index}/{total_scenarios}: compiling results",
+                )
             results.add_result(scenario_result)
 
         if (
@@ -1286,6 +1290,20 @@ class ALMEngine:
                 }
             ]
         )
+
+        if progress_callback:
+            try:
+                final_step = min(
+                    step_offset + total_accounts * config.num_simulations,
+                    total_steps,
+                )
+                progress_callback(
+                    final_step,
+                    total_steps,
+                    f"Scenario {scenario_index}/{total_scenarios}: compiling results",
+                )
+            except Exception:  # pragma: no cover
+                pass
 
         return ScenarioResult(
             scenario_id=scenario.scenario_id,
