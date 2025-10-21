@@ -2189,8 +2189,21 @@ def main() -> None:
                     st.session_state["latest_bundle_error"] = str(bundle_exc)
     elif runner.running:
         # Background analysis still in progress; trigger a lightweight rerun to refresh progress indicators.
+        sentinel_path = PROJECT_ROOT / "config" / "rerun_sentinel"
+        try:
+            sentinel_path.parent.mkdir(parents=True, exist_ok=True)
+            sentinel_path.write_bytes(str(time.time()).encode("utf-8"))
+        except Exception:
+            pass
+        progress_event = st.session_state.get("analysis_progress")
+        progress_value = 0
+        if progress_event and progress_event.total:
+            progress_value = min(
+                100, int((progress_event.step / max(progress_event.total, 1)) * 100)
+            )
+        progress_bar_placeholder.progress(progress_value)
         time.sleep(0.2)
-        st.rerun()
+        st.experimental_rerun()
     results = st.session_state.get("run_results")
     bundle_info = st.session_state.get("latest_bundle")
     bundle_error = st.session_state.pop("latest_bundle_error", None)
