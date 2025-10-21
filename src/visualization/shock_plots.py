@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from ..models.results import EngineResults
+from .figure_utils import annotate_reference_lines, label_vertical_bars
 
 
 def _setup_figure(figsize=(10, 6)):
@@ -222,17 +223,15 @@ def plot_shock_pv_delta(
     ax.set_ylabel("Present Value ($)")
     ax.set_title("Portfolio PV Comparison", fontsize=13, fontweight="bold")
     ax.grid(True, axis="y", linestyle="--", alpha=0.25)
-
-    for bar, value in zip(bars, values):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            value,
-            f"${value:,.0f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            fontweight="bold",
-        )
+    label_vertical_bars(
+        ax,
+        bars,
+        formatter=lambda v: f"${v:,.0f}",
+        margin_ratio=0.05,
+        inside_ratio=0.35,
+        padding_ratio=0.05,
+        text_kwargs={"fontsize": 10, "fontweight": "bold", "color": "#1f1f1f"},
+    )
 
     if delta is not None:
         annotation = f"Delta {delta:+,.0f}"
@@ -316,35 +315,41 @@ def plot_shock_group_summary(
 
     fig, ax = _setup_figure(figsize=(10.5, 6))
     positions = np.arange(len(labels))
-    ax.bar(positions, values, color=colors, edgecolor="black", alpha=0.85)
+    bars = ax.bar(positions, values, color=colors, edgecolor="black", alpha=0.85)
     ax.set_xticks(positions)
     ax.set_xticklabels(labels, rotation=20, ha="right")
-
-    for idx, row in enumerate(rows):
-        ax.text(
-            positions[idx],
-            values[idx],
-            f"${values[idx]:,.0f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            fontweight="bold",
-        )
-        delta = row.get("delta")
-        if delta is not None and abs(delta) > 1e-6:
-            ax.text(
-                positions[idx],
-                values[idx] * 0.98,
-                f"{delta:+,.0f}",
-                ha="center",
-                va="top",
-                fontsize=9,
-                color="#333333",
-            )
 
     ax.set_ylabel("Present Value ($)")
     ax.set_title(title, fontsize=14, fontweight="bold")
     ax.grid(True, axis="y", alpha=0.25)
     _format_currency_axis(ax, values, axis="y")
+    label_vertical_bars(
+        ax,
+        bars,
+        formatter=lambda v: f"${v:,.0f}",
+        margin_ratio=0.08,
+        inside_ratio=0.3,
+        padding_ratio=0.045,
+        text_kwargs={"fontsize": 10, "fontweight": "bold", "color": "#1f1f1f"},
+    )
+    deltas = [row.get("delta") for row in rows]
+    max_value = max(values) if values else 0.0
+    offset = max_value * 0.035 if max_value else 0.05
+    for idx, delta in enumerate(deltas):
+        if delta is None or abs(delta) <= 1e-6:
+            continue
+        text_y = values[idx] - offset if delta >= 0 else values[idx] + offset
+        va = "top" if delta >= 0 else "bottom"
+        ax.text(
+            positions[idx],
+            text_y,
+            f"{delta:+,.0f}",
+            ha="center",
+            va=va,
+            fontsize=9,
+            color="#333333",
+            clip_on=True,
+        )
+
     fig.tight_layout()
     return fig

@@ -13,6 +13,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.colors import sample_colorscale
 
+from .figure_utils import (
+    annotate_reference_lines,
+    label_horizontal_bars,
+    label_vertical_bars,
+)
+
 
 def extract_monte_carlo_data(
     results,
@@ -580,13 +586,13 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         )
         ax5.set_yticks(y_pos)
         ax5.set_yticklabels(labels)
-        line_annotations: list[tuple[float, str, dict[str, object]]] = []
+        reference_lines: list[tuple[float, str, dict[str, object]]] = []
         if book_value is not None:
             ax5.axvline(book_value, color="#1f1f1f", linestyle="--", linewidth=1.4, zorder=5)
-            line_annotations.append((book_value, "Book value", {"color": "#1f1f1f"}))
+            reference_lines.append((book_value, "Book value", {"color": "#1f1f1f"}))
         if base_case_pv is not None:
             ax5.axvline(base_case_pv, color="#f6a21a", linestyle=":", linewidth=1.4, zorder=5)
-            line_annotations.append((base_case_pv, "Base case", {"color": "#b56b00"}))
+            reference_lines.append((base_case_pv, "Base case", {"color": "#b56b00"}))
         ax5.set_xlabel("Present value ($)")
         ax5.set_title("Percentile ladder", fontweight="bold")
         reference_values = list(values)
@@ -595,43 +601,27 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
         if base_case_pv is not None:
             reference_values.append(base_case_pv)
         _format_currency_axis(ax5, reference_values, axis="x")
-        max_value = max(reference_values) if reference_values else 0
-        x_max = max_value * 1.15 if max_value else 1
+        max_reference = max(reference_values) if reference_values else 0
+        x_max = max_reference * 1.15 if max_reference else 1
         ax5.set_xlim(0, x_max)
-        label_offset = max_value * 0.04 if max_value else 0.05
-        for rect, val in zip(bars, values):
-            y_center = rect.get_y() + rect.get_height() / 2
-            text_x = val - label_offset
-            if text_x <= max_value * 0.02:
-                text_x = val + label_offset
-                ha = "left"
-            else:
-                ha = "right"
-            ax5.text(
-                min(max(text_x, 0), x_max),
-                y_center,
-                f"${val:,.0f}",
-                va="center",
-                ha=ha,
-                fontsize=9,
-                color="#203040",
-                fontweight="bold",
-                clip_on=True,
+        label_horizontal_bars(
+            ax5,
+            bars,
+            formatter=lambda v: f"${v:,.0f}",
+            margin_ratio=0.0,
+            inside_ratio=0.35,
+            padding_ratio=0.06,
+            text_kwargs={"fontsize": 9, "fontweight": "bold", "color": "#203040"},
+        )
+        if reference_lines:
+            annotate_reference_lines(
+                ax5,
+                reference_lines,
+                orientation="vertical",
+                pad_ratio=0.035,
+                text_kwargs={"fontsize": 9, "fontweight": "bold"},
             )
         ax5.grid(True, alpha=0.2, axis="x", linestyle="--")
-        for xpos, label, style in line_annotations:
-            ax5.text(
-                xpos,
-                len(values) - 0.35,
-                label,
-                ha="center",
-                va="bottom",
-                fontsize=9,
-                fontweight="bold",
-                color=style.get("color", "#1f1f1f"),
-                alpha=0.9,
-                clip_on=True,
-            )
         for spine in ("top", "right"):
             ax5.spines[spine].set_visible(False)
         ax5.set_axisbelow(True)
@@ -667,19 +657,8 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
                     color="#1f1f1f",
                     linestyle=(0, (6, 4)),
                     linewidth=1.6,
-                    label="Book value",
                     zorder=5,
                 )
-            ax6.bar_label(
-                rects,
-                labels=[f"${val:,.0f}" for val in values],
-                padding=4,
-                fontsize=10,
-                color="#1f1f1f",
-                fontweight="bold",
-                rotation=0,
-                label_type="edge",
-            )
             ax6.set_ylabel("Present value ($)")
             ax6.set_title("Scenarios vs. Monte Carlo percentiles", fontweight="bold")
             ax6.set_xticks(positions)
@@ -690,12 +669,31 @@ def create_monte_carlo_dashboard(data: Dict[str, object]) -> plt.Figure:
                 candidate_values.append(book_value)
             max_reference = max(candidate_values)
             ax6.set_ylim(0, max_reference * 1.12 if max_reference else 1)
+            label_vertical_bars(
+                ax6,
+                rects,
+                formatter=lambda v: f"${v:,.0f}",
+                margin_ratio=0.0,
+                inside_ratio=0.3,
+                padding_ratio=0.05,
+                text_kwargs={"fontsize": 10, "fontweight": "bold", "color": "#1f1f1f"},
+            )
+            reference_specs = []
+            if book_value is not None:
+                reference_specs.append((book_value, "Book value", {"color": "#1f1f1f"}))
+            if reference_specs:
+                annotate_reference_lines(
+                    ax6,
+                    reference_specs,
+                    orientation="horizontal",
+                    pad_ratio=0.04,
+                    text_kwargs={"fontsize": 9, "fontweight": "bold"},
+                )
             ax6.grid(True, alpha=0.2, axis="y", linestyle="--")
             ax6.set_axisbelow(True)
             for spine in ("top", "right"):
                 ax6.spines[spine].set_visible(False)
             ax6.spines["left"].set_alpha(0.6)
-            ax6.legend(loc="upper left", frameon=False)
         else:
             ax6.axis("off")
     else:
