@@ -1,0 +1,11 @@
+{
+  "id": "fe8986237fa94423af6f27d53bf375fc",
+  "state": "running",
+  "message": "Scenario 2/13: account 20000/20000 (ACC00020000)",
+  "step": 40000,
+  "total": 20240000,
+  "started_at": "2025-10-21T22:13:23.994945+00:00",
+  "updated_at": "2025-10-21T22:25:24.860644+00:00",
+  "pid": 24268,
+  "extras": {}
+}

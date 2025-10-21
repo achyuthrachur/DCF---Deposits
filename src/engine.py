@@ -600,6 +600,7 @@ class ALMEngine:
                     settings,
                     account_progress=account_progress,
                 )
+                emit_progress(step_offset + scenario_steps, f"Scenario {index}/{total_scenarios}: compiling results")
                 if scenario.scenario_type == ScenarioType.BASE:
                     base_cashflow_summary = cashflows.groupby("month")["total_cash_flow"].sum()
                 elif base_cashflow_summary is not None and logger.isEnabledFor(logging.DEBUG):
