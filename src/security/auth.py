@@ -1,4 +1,4 @@
-"""Simple authentication manager with optional email token flows."""
+﻿"""Simple authentication manager with optional email token flows."""
 
 from __future__ import annotations
 
@@ -137,6 +137,16 @@ class AuthManager:
                 return record
         return None
 
+    def _find_user_by_email(self, email: str) -> Optional[Dict[str, object]]:
+        email_lower = email.strip().lower()
+        for record in self._users:
+            if str(record.get("email", "")).strip().lower() == email_lower:
+                return record
+        return None
+
+    def _username_taken(self, username: str) -> bool:
+        return self._find_user(username) is not None
+
     def _hash_password(self, password: str, salt_hex: Optional[str] = None) -> Tuple[str, str]:
         if salt_hex:
             salt = bytes.fromhex(salt_hex)
@@ -173,7 +183,6 @@ class AuthManager:
 
     def _purge_expired_tokens(self) -> None:
         now = datetime.now(timezone.utc)
-        ttl = TOKEN_TTL_MINUTES
         for bucket in ("activation", "reset"):
             entries = self._token_store.setdefault(bucket, {})
             expired = []
@@ -262,6 +271,35 @@ class AuthManager:
             message = f"Activation token generated. Provide this code to the user: `{token}`"
         return TokenDispatchResult(sent, token, message)
 
+    def request_activation_by_email(self, email: str, notifier: EmailNotifier) -> TokenDispatchResult:
+        """Issue an activation token using only an allowed email.
+
+        With this flow, the user chooses their username during activation.
+        """
+        email = email.strip()
+        if not self._allowed_email(email):
+            return TokenDispatchResult(False, "", "This email is not authorized for activation.")
+        existing = self._find_user_by_email(email)
+        if existing and existing.get("active"):
+            return TokenDispatchResult(False, "", "An active account already exists for this email.")
+        token = self._issue_token("activation", {"email": email})
+        activation_link = f"{os.environ.get('APP_BASE_URL', 'https://example.com')}/?token={token}"
+        email_body = (
+            "You requested access to the Deposit DCF analysis dashboard.\n\n"
+            f"Activation token: {token}\n"
+            "Visit the app and enter the token; you will choose a username and password there.\n\n"
+            "This token expires in one hour."
+        )
+        sent = notifier.send_token(
+            to_address=email,
+            subject="Deposit DCF dashboard activation",
+            body=email_body + f"\n\nSuggested link: {activation_link}",
+        )
+        message = (
+            "Activation email sent. Please check your inbox." if sent else f"Activation token: `{token}`"
+        )
+        return TokenDispatchResult(sent, token, message)
+
     def complete_activation(self, token: str, password: str, display_name: Optional[str] = None) -> Tuple[bool, str]:
         payload = self._consume_token("activation", token.strip())
         if not payload:
@@ -276,6 +314,42 @@ class AuthManager:
         record["active"] = True
         if display_name:
             record["name"] = display_name
+        self._save()
+        return True, "Account activated successfully."
+
+    def complete_activation_with_username(
+        self, token: str, username: str, password: str, display_name: Optional[str] = None
+    ) -> Tuple[bool, str]:
+        """Complete activation when the token was requested by email only."""
+        payload = self._consume_token("activation", token.strip())
+        if not payload:
+            return False, "Activation token is invalid or has expired."
+        email = str(payload.get("email", "")).strip()
+        if not email:
+            return False, "Activation token is missing email context."
+        if self._username_taken(username):
+            return False, "That username is already taken. Choose another."
+        if not self._allowed_email(email):
+            return False, "This email is not authorized for activation."
+        record = self._find_user_by_email(email)
+        salt, pw_hash = self._hash_password(password)
+        if record is None:
+            record = {
+                "username": username,
+                "email": email,
+                "name": display_name or username,
+                "salt": salt,
+                "password_hash": pw_hash,
+                "active": True,
+            }
+            self._users.append(record)
+        else:
+            record["username"] = username
+            record["salt"] = salt
+            record["password_hash"] = pw_hash
+            record["active"] = True
+            if display_name:
+                record["name"] = display_name
         self._save()
         return True, "Account activated successfully."
 
@@ -368,21 +442,10 @@ class AuthManager:
         record["active"] = True
         if display_name:
             record["name"] = display_name
+        if email:
+            record["email"] = email
         self._save()
         return True, "Password updated successfully."
-
-    def users(self) -> List[UserRecord]:
-        return [
-            UserRecord(
-                username=str(item.get("username")),
-                name=str(item.get("name") or item.get("username")),
-                email=str(item.get("email") or ""),
-                salt=str(item.get("salt") or ""),
-                password_hash=str(item.get("password_hash") or ""),
-                active=bool(item.get("active", False)),
-            )
-            for item in self._users
-        ]
 
     def notifier(self) -> EmailNotifier:
         return EmailNotifier(self._data.get("smtp") or {})

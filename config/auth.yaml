@@ -1,7 +1,10 @@
 ﻿settings:
   hash_iterations: 180000
 allowed_usernames: []
-allowed_emails: []
+allowed_emails:
+  - bhanu.sehgal@crowe.com
+  - ryan.michalik@crowe.com
+  - achyuth.rachur@crowe.com
 users:
   - username: admin
     name: Administrator
@@ -19,3 +22,4 @@ smtp:
   password_env: ""
   from_email: ""
   starttls: true
+

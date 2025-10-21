@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Streamlit web interface for the NMD ALM engine."""
 
 from __future__ import annotations
@@ -2248,6 +2248,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 
