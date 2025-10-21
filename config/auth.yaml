@@ -1,0 +1,21 @@
+﻿settings:
+  hash_iterations: 180000
+allowed_usernames: []
+allowed_emails: []
+users:
+  - username: admin
+    name: Administrator
+    email: admin@example.com
+    salt: ""
+    password_hash: ""
+    active: false
+pending_tokens:
+  activation: {}
+  reset: {}
+smtp:
+  host: ""
+  port: 587
+  username: ""
+  password_env: ""
+  from_email: ""
+  starttls: true

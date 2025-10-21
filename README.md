@@ -13,6 +13,8 @@ flexible field mapping so it can accommodate institution-specific data layouts.
 - Scenario generation for parallel/non-parallel curve shocks plus Monte Carlo simulations with configurable volatility and drift.
 - Account-level cash flow projection, terminal value capture, and present value calculation.
 - Download packages combining Excel workbooks, Word narrative reports, and charts (served as a zip in Streamlit; legacy CSV exports remain available via the CLI) plus optional Monte Carlo visualisations (rate spaghetti/fan charts, PV distributions, dashboards).
+- Background execution pipeline keeps the Streamlit UI responsive during long multi-scenario runs and streams progress updates even when processing thousands of accounts.
+- Built-in authentication with configurable username/email allowlists, optional email-delivered activation/reset tokens, and per-user password management.
 
 ## Getting Started
 1. Install dependencies:
@@ -84,3 +86,12 @@ service with a custom frontend. Streamlit Cloud offers the fastest path to a wor
 - Add advanced scenarios (steepener/flattener, ramps, Monte Carlo).
 - Harden the Streamlit UX (assumption templates, saved profiles, richer visuals).
 - Build comprehensive unit test coverage using `pytest`.
+
+
+## Authentication & Access Control
+- Update `config/auth.yaml` with the list of permitted usernames/emails. Accounts with empty `password_hash`/`salt` will prompt for activation.
+- First-time setup: open the app and initialise the administrator account by supplying an email and strong password when prompted.
+- Users can request activation or password reset tokens. If SMTP details are configured under `smtp` in `config/auth.yaml` (or via the environment variable referenced in `password_env`), the app sends an email automatically; otherwise the token is displayed for manual distribution.
+- Optionally set `APP_BASE_URL` to include in activation emails so recipients can navigate directly back to the app.
+- Tokens expire after 60 minutes and passwords are stored as PBKDF2-SHA256 hashes.
+

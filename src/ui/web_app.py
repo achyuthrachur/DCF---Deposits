@@ -8,9 +8,10 @@ import os
 import logging
 import base64
 import json
+import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -22,11 +23,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import FRED_API_KEY
+from src.runtime.analysis_runner import AnalysisRunner, ProgressEvent
+from src.security.auth import AuthManager
 
 st.cache_data.clear()
 st.cache_resource.clear()
 
 REPO_ROOT = PROJECT_ROOT.parent
+AUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth.yaml"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -61,6 +65,157 @@ def _trigger_auto_download(zip_bytes: bytes, file_name: str, token: str) -> None
     </html>
     """
     components.html(payload, height=0, width=0)
+
+
+def _get_auth_manager() -> AuthManager:
+    return st.session_state.setdefault("auth_manager", AuthManager(AUTH_CONFIG_PATH))
+
+
+def _ensure_authenticated() -> bool:
+    auth_manager = _get_auth_manager()
+    if "auth_user" not in st.session_state:
+        st.session_state["auth_user"] = None
+    if st.session_state["auth_user"]:
+        return True
+
+    users = auth_manager.users()
+    notifier = auth_manager.notifier()
+    active_users = [user for user in users if user.active]
+
+    st.markdown("### Secure Sign-in")
+
+    if not active_users:
+        st.warning(
+            "No active user accounts were found. Initialise the administrator account below to continue."
+        )
+        default_user = users[0] if users else None
+        with st.form("initialise_admin", clear_on_submit=True):
+            username_field = st.text_input(
+                "Administrator username",
+                value=default_user.username if default_user else "admin",
+                disabled=bool(default_user and default_user.username),
+            )
+            display_name = st.text_input(
+                "Display name",
+                value=default_user.name if default_user else "Administrator",
+            )
+            email_value = st.text_input(
+                "Administrator email",
+                value=default_user.email if default_user else "",
+            )
+            password = st.text_input("New password", type="password")
+            confirm = st.text_input("Confirm password", type="password")
+            submitted = st.form_submit_button("Activate administrator")
+        if submitted:
+            if password != confirm:
+                st.error("Passwords do not match.")
+            elif len(password) < 8:
+                st.error("Please choose a password with at least 8 characters.")
+            else:
+                username_value = username_field or (default_user.username if default_user else "admin")
+                success, message = auth_manager.set_password_direct(
+                    username_value,
+                    password,
+                    display_name=display_name or username_value,
+                    email=email_value or (default_user.email if default_user else ""),
+                )
+                if success:
+                    st.success("Administrator account initialised. Please sign in below.")
+                else:
+                    st.error(message)
+        return False
+
+    login_tab, activate_tab, reset_tab = st.tabs(["Sign in", "Activate account", "Reset password"])
+
+    with login_tab.form("signin_form", clear_on_submit=True):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        remember_me = st.checkbox("Remember me", value=False)
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        user = auth_manager.authenticate(username, password)
+        if user:
+            st.session_state["auth_user"] = {
+                "username": user.username,
+                "name": user.name,
+                "email": user.email,
+                "remember": remember_me,
+            }
+            st.success(f"Welcome back, {user.name}!")
+            st.experimental_rerun()
+        else:
+            st.error("Invalid username or password.")
+
+    with activate_tab.expander("Request activation link", expanded=True):
+        with st.form("activation_request", clear_on_submit=True):
+            req_username = st.text_input("Username", key="activation_username")
+            req_email = st.text_input("Email", key="activation_email")
+            send_request = st.form_submit_button("Send activation email")
+        if send_request:
+            if not req_username or not req_email:
+                st.error("Provide both username and email to request activation.")
+            else:
+                result = auth_manager.request_activation(req_username, req_email, notifier)
+                if result.sent:
+                    st.success(result.message)
+                else:
+                    st.warning(result.message)
+
+    with activate_tab.form("activation_complete", clear_on_submit=True):
+        token_value = st.text_input("Activation token")
+        display_name = st.text_input("Display name (optional)")
+        new_password = st.text_input("Create password", type="password")
+        confirm_password = st.text_input("Confirm password", type="password")
+        complete_activation = st.form_submit_button("Activate account")
+    if complete_activation:
+        if new_password != confirm_password:
+            st.error("Passwords do not match.")
+        elif len(new_password) < 8:
+            st.error("Please choose a password with at least 8 characters.")
+        else:
+            success, message = auth_manager.complete_activation(
+                token_value,
+                new_password,
+                display_name=display_name or None,
+            )
+            if success:
+                st.success(message)
+            else:
+                st.error(message)
+
+    with reset_tab.expander("Request password reset", expanded=True):
+        with st.form("password_reset_request", clear_on_submit=True):
+            reset_username = st.text_input("Username", key="reset_username")
+            reset_email = st.text_input("Email", key="reset_email")
+            send_reset = st.form_submit_button("Send reset email")
+        if send_reset:
+            if not reset_username or not reset_email:
+                st.error("Provide both username and email to request a reset token.")
+            else:
+                result = auth_manager.request_password_reset(reset_username, reset_email, notifier)
+                if result.sent:
+                    st.success(result.message)
+                else:
+                    st.warning(result.message)
+
+    with reset_tab.form("password_reset_complete", clear_on_submit=True):
+        reset_token = st.text_input("Reset token")
+        new_password = st.text_input("New password", type="password")
+        confirm_password = st.text_input("Confirm password", type="password")
+        complete_reset = st.form_submit_button("Update password")
+    if complete_reset:
+        if new_password != confirm_password:
+            st.error("Passwords do not match.")
+        elif len(new_password) < 8:
+            st.error("Please choose a password with at least 8 characters.")
+        else:
+            success, message = auth_manager.complete_password_reset(reset_token, new_password)
+            if success:
+                st.success(message)
+            else:
+                st.error(message)
+
+    st.stop()
 
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
@@ -1086,6 +1241,26 @@ def main() -> None:
         layout="wide",
     )
 
+    if "analysis_runner" not in st.session_state:
+        st.session_state["analysis_runner"] = AnalysisRunner()
+    if "analysis_progress" not in st.session_state:
+        st.session_state["analysis_progress"] = None
+    if "pending_analysis" not in st.session_state:
+        st.session_state["pending_analysis"] = None
+    if "analysis_status_message" not in st.session_state:
+        st.session_state["analysis_status_message"] = None
+
+    if not _ensure_authenticated():
+        return
+
+    auth_user = st.session_state.get("auth_user")
+    with st.sidebar:
+        if auth_user:
+            st.markdown(f"**Signed in as {auth_user['name']}**")
+        if st.button("Sign out"):
+            st.session_state["auth_user"] = None
+            st.experimental_rerun()
+
     st.markdown(
         """
         <style>
@@ -1755,125 +1930,199 @@ def main() -> None:
     run_clicked = st.button("Run Analysis", type="primary")
 
     results = st.session_state.get("run_results")
-    progress_bar = None
-    progress_text = None
+    runner: AnalysisRunner = st.session_state["analysis_runner"]
+    progress_text_placeholder = st.empty()
+    progress_bar_placeholder = st.empty()
 
     if run_clicked:
-        package_opts = st.session_state.get("download_package_options", {})
-        engine = ALMEngine()
-        try:
-            engine.load_dataframe(
-                dataframe=df_raw,
-                field_map=st.session_state["field_map"],
-                optional_fields=st.session_state.get("optional_fields", []),
-            )
-            engine.set_segmentation(segmentation)
-            for segment_key, values in assumptions.items():
-                decay_rate_value = (
-                    _decimalize(values["decay_rate"]) if values.get("decay_rate") is not None else None
+        if runner.running:
+            st.warning("An analysis is already in progress. Please wait for it to complete before starting another run.")
+        else:
+            package_opts = st.session_state.get("download_package_options", {})
+            engine = ALMEngine()
+            try:
+                engine.load_dataframe(
+                    dataframe=df_raw,
+                    field_map=st.session_state["field_map"],
+                    optional_fields=st.session_state.get("optional_fields", []),
                 )
-                engine.set_assumptions(
-                    segment_key=segment_key,
-                    decay_rate=decay_rate_value,
-                    wal_years=values["wal_years"],
-                    deposit_beta_up=_decimalize(values["deposit_beta_up"]),
-                    deposit_beta_down=_decimalize(values["deposit_beta_down"]),
-                    repricing_beta_up=_decimalize(values["repricing_beta_up"]),
-                    repricing_beta_down=_decimalize(values["repricing_beta_down"]),
-                    decay_priority=values.get("decay_priority", "auto"),
-                )
-            mode = discount_config.get("mode")
-            if mode == "single":
-                engine.set_discount_single_rate(_decimalize(discount_config["rate"]))
-            elif mode == "manual":
-                engine.set_discount_yield_curve(
-                    {int(k): _decimalize(v) for k, v in discount_config["tenor_rates"].items()},
-                    interpolation_method=discount_config.get("interpolation", "linear"),
-                    source="manual",
-                )
-            elif mode == "fred":
-                fred_api_key = discount_config.get("api_key") or os.environ.get("FRED_API_KEY", FRED_API_KEY)
-                interpolation = discount_config.get("interpolation", "linear")
-                target_date = discount_config.get("target_date")
-                if fred_api_key:
-                    engine.set_discount_curve_from_fred(
-                        fred_api_key,
-                        interpolation_method=interpolation,
-                        target_date=target_date,
+                engine.set_segmentation(segmentation)
+                for segment_key, values in assumptions.items():
+                    decay_rate_value = (
+                        _decimalize(values["decay_rate"]) if values.get("decay_rate") is not None else None
                     )
-                else:
-                    curve_snapshot = st.session_state.get("fred_curve_snapshot")
-                    if not curve_snapshot:
-                        st.error("Fetch a FRED curve or provide an API key before running analysis.")
-                        return
-                    engine.set_discount_curve(curve_snapshot, source="fred")
-            base_market_path = st.session_state.get(
-                "base_market_path",
-                [0.03] * int(max_projection_months),
-            )
-            engine.set_base_market_rate_path(base_market_path)
-            if monte_carlo_config:
-                engine.set_monte_carlo_config(monte_carlo_config)
-            engine.configure_standard_scenarios(scenario_flags)
-            progress_text = st.empty()
-            progress_bar = st.progress(0)
-
-            def progress_callback(current: int, total: int, message: str) -> None:
-                pct = int((current / max(total, 1)) * 100)
-                progress_text.markdown(f"**{message}**")
-                progress_bar.progress(min(100, pct))
-
-            with st.spinner("Executing cash flow projections..."):
-                results = engine.run_analysis(
-                    projection_months=int(projection_months),
-                    materiality_threshold=float(materiality_threshold),
-                    max_projection_months=int(max_projection_months),
-                    progress_callback=progress_callback,
+                    engine.set_assumptions(
+                        segment_key=segment_key,
+                        decay_rate=decay_rate_value,
+                        wal_years=values["wal_years"],
+                        deposit_beta_up=_decimalize(values["deposit_beta_up"]),
+                        deposit_beta_down=_decimalize(values["deposit_beta_down"]),
+                        repricing_beta_up=_decimalize(values["repricing_beta_up"]),
+                        repricing_beta_down=_decimalize(values["repricing_beta_down"]),
+                        decay_priority=values.get("decay_priority", "auto"),
+                    )
+                mode = discount_config.get("mode")
+                if mode == "single":
+                    engine.set_discount_single_rate(_decimalize(discount_config["rate"]))
+                elif mode == "manual":
+                    engine.set_discount_yield_curve(
+                        {int(k): _decimalize(v) for k, v in discount_config["tenor_rates"].items()},
+                        interpolation_method=discount_config.get("interpolation", "linear"),
+                        source="manual",
+                    )
+                elif mode == "fred":
+                    fred_api_key = discount_config.get("api_key") or os.environ.get("FRED_API_KEY", FRED_API_KEY)
+                    interpolation = discount_config.get("interpolation", "linear")
+                    target_date = discount_config.get("target_date")
+                    if fred_api_key:
+                        engine.set_discount_curve_from_fred(
+                            fred_api_key,
+                            interpolation_method=interpolation,
+                            target_date=target_date,
+                        )
+                    else:
+                        curve_snapshot = st.session_state.get("fred_curve_snapshot")
+                        if not curve_snapshot:
+                            st.error("Fetch a FRED curve or provide an API key before running analysis.")
+                            return
+                        engine.set_discount_curve(curve_snapshot, source="fred")
+                base_market_path = st.session_state.get(
+                    "base_market_path",
+                    [0.03] * int(max_projection_months),
                 )
+                engine.set_base_market_rate_path(base_market_path)
+                if monte_carlo_config:
+                    engine.set_monte_carlo_config(monte_carlo_config)
+                engine.configure_standard_scenarios(scenario_flags)
+                try:
+                    discount_config_obj = engine.discount_configuration()
+                except Exception:
+                    discount_config_obj = None
+                analysis_metadata = {
+                    "run_timestamp": datetime.utcnow().isoformat(),
+                    "segmentation_method": engine.segmentation_method,
+                    "projection_settings": {
+                        "base_months": int(projection_months),
+                        "max_months": int(max_projection_months),
+                        "materiality_threshold": float(materiality_threshold),
+                    },
+                    "scenario_flags": scenario_flags,
+                    "monte_carlo_config": (
+                        monte_carlo_config.to_metadata()
+                        if isinstance(monte_carlo_config, MonteCarloConfig)
+                        else None
+                    ),
+                    "assumptions": assumptions,
+                    "field_map": st.session_state.get("field_map", {}),
+                    "discount_selection": discount_config,
+                    "base_market_path": base_market_path,
+                    "download_package_options": package_opts,
+                }
+                try:
+                    analysis_metadata["portfolio"] = {
+                        "account_count": len(engine.accounts),
+                        "total_balance": float(sum(acc.balance for acc in engine.accounts)),
+                    }
+                except Exception:
+                    pass
+                if selected_curve:
+                    analysis_metadata["selected_curve"] = {
+                        "tenors": [int(t) for t in selected_curve.tenors],
+                        "rates": [float(r) for r in selected_curve.rates],
+                        "interpolation": selected_curve.interpolation_method,
+                    }
+
+                def run_task(progress_reporter: Callable[[int, int, str], None]) -> "EngineResults":
+                    def _progress(step: int, total: int, message: str) -> None:
+                        progress_reporter(step, total, message)
+                    return engine.run_analysis(
+                        projection_months=int(projection_months),
+                        materiality_threshold=float(materiality_threshold),
+                        max_projection_months=int(max_projection_months),
+                        progress_callback=_progress,
+                    )
+
+                st.session_state["pending_analysis"] = {
+                    "package_opts": package_opts,
+                    "analysis_metadata": analysis_metadata,
+                    "discount_config": discount_config_obj,
+                    "builder_title": "Deposit Analysis",
+                }
+                runner.start(run_task)
+                st.session_state["analysis_progress"] = ProgressEvent(
+                    step=0,
+                    total=1,
+                    message="Starting analysis...",
+                    timestamp=time.time(),
+                )
+                st.info("Analysis started. Progress updates will appear below.")
+            except ValueError as exc:
+                message = str(exc)
+                if "Invalid rate(s) detected" in message:
+                    details = message.replace("Invalid rate(s) detected for ", "Affected tenors: ")
+                    _render_invalid_rate_message(discount_method, details)
+                else:
+                    st.error(f"Unexpected numeric error: {exc}")
+                st.session_state.pop("run_results", None)
+                st.session_state["pending_analysis"] = None
+                return
+            except ValidationError as exc:
+                st.error(f"Validation error during execution: {exc}")
+                st.session_state["pending_analysis"] = None
+                return
+            except Exception as exc:  # pragma: no cover - guard rail
+                st.error(f"Unexpected error: {exc}")
+                st.session_state["pending_analysis"] = None
+                return
+
+    for event in runner.drain_progress():
+        st.session_state["analysis_progress"] = event
+
+    progress_event: Optional[ProgressEvent] = st.session_state.get("analysis_progress")
+    if progress_event:
+        pct = int((progress_event.step / max(progress_event.total, 1)) * 100)
+        progress_text_placeholder.markdown(f"**{progress_event.message}**")
+        progress_bar_placeholder.progress(min(100, pct))
+    elif runner.running:
+        progress_text_placeholder.markdown("**Analysis running...**")
+        progress_bar_placeholder.progress(0)
+    else:
+        progress_text_placeholder.empty()
+        progress_bar_placeholder.empty()
+
+    if runner.done and st.session_state.get("pending_analysis") is not None:
+        error: Optional[BaseException] = runner.exception()
+        analysis_result: Optional["EngineResults"] = None
+        if error is None:
+            try:
+                analysis_result = runner.result()
+            except Exception as exc:  # pragma: no cover - guard rail
+                error = exc
+        runner.reset()
+        if error is not None:
+            st.session_state["analysis_progress"] = None
+            st.session_state["pending_analysis"] = None
+            st.error(f"Analysis failed: {error}")
+            LOGGER.error("Background analysis failed", exc_info=error)
+        elif analysis_result is not None:
+            st.session_state["run_results"] = analysis_result
+            st.session_state["analysis_progress"] = None
+            pending = st.session_state.get("pending_analysis") or {}
+            st.session_state["pending_analysis"] = None
+            progress_text_placeholder.markdown("**Analysis complete! Preparing visualisations...**")
+            progress_bar_placeholder.progress(100)
+            results = analysis_result
+            st.success("Analysis complete! Scroll down to explore the visualisations.")
+            package_opts = pending.get("package_opts", {}) or {}
             if package_opts.get("enabled", False):
                 try:
-                    try:
-                        discount_config_obj = engine.discount_configuration()
-                    except Exception:
-                        discount_config_obj = None
-                    analysis_metadata = {
-                        "run_timestamp": datetime.utcnow().isoformat(),
-                        "segmentation_method": engine.segmentation_method,
-                        "projection_settings": {
-                            "base_months": int(projection_months),
-                            "max_months": int(max_projection_months),
-                            "materiality_threshold": float(materiality_threshold),
-                        },
-                        "scenario_flags": scenario_flags,
-                        "monte_carlo_config": (
-                            monte_carlo_config.to_metadata()
-                            if isinstance(monte_carlo_config, MonteCarloConfig)
-                            else None
-                        ),
-                        "assumptions": assumptions,
-                        "field_map": st.session_state.get("field_map", {}),
-                        "discount_selection": discount_config,
-                        "base_market_path": base_market_path,
-                        "download_package_options": package_opts,
-                    }
-                    try:
-                        analysis_metadata["portfolio"] = {
-                            "account_count": len(engine.accounts),
-                            "total_balance": float(sum(acc.balance for acc in engine.accounts)),
-                        }
-                    except Exception:
-                        pass
-                    if selected_curve:
-                        analysis_metadata["selected_curve"] = {
-                            "tenors": [int(t) for t in selected_curve.tenors],
-                            "rates": [float(r) for r in selected_curve.rates],
-                            "interpolation": selected_curve.interpolation_method,
-                        }
-                    builder = InMemoryReportBuilder(base_title="Deposit Analysis")
+                    builder = InMemoryReportBuilder(
+                        base_title=pending.get("builder_title", "Deposit Analysis")
+                    )
                     bundle = builder.build(
-                        results,
-                        discount_config=discount_config_obj,
-                        analysis_metadata=analysis_metadata,
+                        analysis_result,
+                        discount_config=pending.get("discount_config"),
+                        analysis_metadata=pending.get("analysis_metadata", {}),
                         export_cashflows=package_opts.get("export_cashflows", False),
                         cashflow_mode=package_opts.get("cashflow_mode", "sample"),
                         cashflow_sample_size=int(package_opts.get("cashflow_sample_size", 20)),
@@ -1891,31 +2140,9 @@ def main() -> None:
                     st.success(
                         "Download package ready. Your browser should start the download automatically."
                     )
-                except Exception as bundle_exc:
+                except Exception as bundle_exc:  # pragma: no cover
                     LOGGER.warning("Download packaging failed: %s", bundle_exc)
                     st.session_state["latest_bundle_error"] = str(bundle_exc)
-        except ValueError as exc:
-            message = str(exc)
-            if "Invalid rate(s) detected" in message:
-                details = message.replace("Invalid rate(s) detected for ", "Affected tenors: ")
-                _render_invalid_rate_message(discount_method, details)
-            else:
-                st.error(f"Unexpected numeric error: {exc}")
-            st.session_state.pop("run_results", None)
-            return
-        except ValidationError as exc:
-            st.error(f"Validation error during execution: {exc}")
-            return
-        except Exception as exc:  # pragma: no cover - guard rail
-            st.error(f"Unexpected error: {exc}")
-            return
-
-        st.session_state["run_results"] = results
-        st.success("Analysis complete! Scroll down to explore the visualisations.")
-
-        if progress_text and progress_bar:
-            progress_text.markdown("**Preparing visualisations...**")
-            progress_bar.progress(80)
     results = st.session_state.get("run_results")
     bundle_info = st.session_state.get("latest_bundle")
     bundle_error = st.session_state.pop("latest_bundle_error", None)
@@ -2021,6 +2248,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
