@@ -149,16 +149,21 @@ def _ensure_authenticated() -> bool:
     with activate_tab.expander("Request activation link", expanded=True):
         with st.form("activation_request", clear_on_submit=True):
             req_email = st.text_input("Email", key="activation_email")
-            send_request = st.form_submit_button("Send activation email")
+            send_request = st.form_submit_button("Generate activation code")
         if send_request:
             if not req_email:
                 st.error("Provide an email address to request activation.")
             else:
-                result = auth_manager.request_activation_by_email(req_email, notifier)
+                result = auth_manager.request_activation_by_email(req_email)
                 if result.sent:
+                    st.session_state["activation_last_token"] = result.token
                     st.success(result.message)
                 else:
                     st.warning(result.message)
+        generated_token = st.session_state.get("activation_last_token")
+        if generated_token:
+            st.caption("Activation token (share with the requester; valid for one hour):")
+            st.code(generated_token, language="text")
 
     with activate_tab.form("activation_complete", clear_on_submit=True):
         token_value = st.text_input("Activation token")
@@ -183,6 +188,7 @@ def _ensure_authenticated() -> bool:
             )
             if success:
                 st.success(message)
+                st.session_state.pop("activation_last_token", None)
             else:
                 st.error(message)
 

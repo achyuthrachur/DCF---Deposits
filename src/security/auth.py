@@ -265,7 +265,7 @@ class AuthManager:
         )
 
     # ----------------------------------------------------------- activation & reset
-    def request_activation(self, username: str, email: str, notifier: EmailNotifier) -> TokenDispatchResult:
+    def request_activation(self, username: str, email: str, notifier: Optional[EmailNotifier] = None) -> TokenDispatchResult:
         username = username.strip()
         email = email.strip()
         record = self._find_user(username)
@@ -285,29 +285,13 @@ class AuthManager:
                 "email": email,
             },
         )
-        activation_link = f"{os.environ.get('APP_BASE_URL', 'https://example.com')}/?token={token}"
-        email_body = (
-            "You requested access to the Deposit DCF analysis dashboard.\n\n"
-            f"Activation token: {token}\n"
-            "If the application URL supports direct links, visit the app and enter the token when prompted.\n\n"
-            "This token expires in one hour."
+        message = (
+            "Activation token generated. Enter this code in the app within one hour to complete setup."
         )
-        sent = notifier.send_token(
-            to_address=email,
-            subject="Deposit DCF dashboard activation",
-            body=email_body + f"\n\nSuggested link: {activation_link}",
-        )
-        if sent:
-            message = "Activation email sent. Please check your inbox."
-        else:
-            message = (
-                "Activation email failed to send. Verify the SMTP credentials and share this token: "
-                f"`{token}`"
-            )
-        return TokenDispatchResult(sent, token, message)
+        return TokenDispatchResult(True, token, message)
 
-    def request_activation_by_email(self, email: str, notifier: EmailNotifier) -> TokenDispatchResult:
-        """Issue an activation token using only an allowed email.
+    def request_activation_by_email(self, email: str, notifier: Optional[EmailNotifier] = None) -> TokenDispatchResult:
+        """Issue an activation token using only an allowed email, without sending email notifications.
 
         With this flow, the user chooses their username during activation.
         """
@@ -318,26 +302,10 @@ class AuthManager:
         if existing and existing.get("active"):
             return TokenDispatchResult(False, "", "An active account already exists for this email.")
         token = self._issue_token("activation", {"email": email})
-        activation_link = f"{os.environ.get('APP_BASE_URL', 'https://example.com')}/?token={token}"
-        email_body = (
-            "You requested access to the Deposit DCF analysis dashboard.\n\n"
-            f"Activation token: {token}\n"
-            "Visit the app and enter the token; you will choose a username and password there.\n\n"
-            "This token expires in one hour."
+        message = (
+            "Activation token generated. Enter this code in the app within one hour to choose your username and password."
         )
-        sent = notifier.send_token(
-            to_address=email,
-            subject="Deposit DCF dashboard activation",
-            body=email_body + f"\n\nSuggested link: {activation_link}",
-        )
-        if sent:
-            message = "Activation email sent. Please check your inbox."
-        else:
-            message = (
-                "Activation email failed to send. Verify the SMTP credentials and share this token: "
-                f"`{token}`"
-            )
-        return TokenDispatchResult(sent, token, message)
+        return TokenDispatchResult(True, token, message)
 
     def complete_activation(self, token: str, password: str, display_name: Optional[str] = None) -> Tuple[bool, str]:
         payload = self._consume_token("activation", token.strip())
