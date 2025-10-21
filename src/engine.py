@@ -906,6 +906,36 @@ class ALMEngine:
                 except Exception:  # pragma: no cover
                     pass
 
+            account_progress_cb: Optional[
+                Callable[[int, int, str, str], None]
+            ] = None
+            if progress_callback and total_accounts > 0:
+                scenario_span = total_accounts * config.num_simulations
+                scenario_cap = min(step_offset + scenario_span, total_steps)
+                chunk_size = max(1, total_accounts // 200)
+
+                def account_progress_cb(
+                    account_idx: int,
+                    account_total: int,
+                    _account_id: str,
+                    _scenario_id: str,
+                    *,
+                    chunk: int = chunk_size,
+                ) -> None:
+                    if account_idx % chunk != 0 and account_idx != account_total:
+                        return
+                    base_progress = step_offset + sim_index * total_accounts + min(account_idx, account_total)
+                    safe_progress = min(base_progress, scenario_cap)
+                    detail = (
+                        f"Scenario {scenario_index}/{total_scenarios}: "
+                        f"simulation {sim_index + 1}/{config.num_simulations} "
+                        f"(accounts {account_idx}/{account_total})"
+                    )
+                    try:
+                        progress_callback(safe_progress, total_steps, detail)
+                    except Exception:  # pragma: no cover
+                        pass
+
             if config.level == MonteCarloLevel.STATIC_CURVE:
                 short_path = generate_vasicek_path(short_params, months, rng)
                 long_path = None
@@ -992,13 +1022,14 @@ class ALMEngine:
                 scenario_id=f"{scenario.scenario_id}_sim_{sim_index + 1}",
                 scenario_type=ScenarioType.CUSTOM,
                 shock_vector=shock_vector,
-                description="Monte Carlo simulation path",
+                    description="Monte Carlo simulation path",
             )
 
             projection_totals = projector.project_aggregate(
                 self.accounts,
                 sim_scenario,
                 mc_settings,
+                account_progress=account_progress_cb,
             )
 
             pv_value = projection_totals.portfolio_pv(discount_curve)
