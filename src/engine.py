@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
@@ -37,6 +38,8 @@ from .models.results import EngineResults, ScenarioResult
 from .models.scenario import ScenarioDefinition, ScenarioSet, ScenarioType
 
 logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass
@@ -524,6 +527,15 @@ class ALMEngine:
                     progress_callback(safe_step, total_steps, message)
                 except Exception:  # pragma: no cover - guard rail
                     pass
+            try:
+                from pathlib import Path
+
+                log_file = Path(PROJECT_ROOT) / "config" / "progress.log"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                with log_file.open("a", encoding="utf-8") as fh:
+                    fh.write(f"{time.time():.6f}\t{step}/{total_steps}\t{message}\n")
+            except Exception:
+                pass
 
         base_portfolio_pv: Optional[float] = None
         base_cashflow_summary: Optional[pd.Series] = None
