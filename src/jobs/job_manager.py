@@ -18,6 +18,7 @@ import pandas as pd
 from src.engine import ALMEngine, DiscountConfig, MonteCarloConfig
 from src.reporting import InMemoryReportBuilder
 from src.models.results import EngineResults
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 JOB_ROOT = PROJECT_ROOT / "output" / "jobs"
 
@@ -29,14 +30,19 @@ def _utc_now_iso() -> str:
 def _read_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
-    with path.open("r", encoding="utf-8") as fh:
-        return json.load(fh)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except json.JSONDecodeError:
+        return {}
 
 
 def _write_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
+    temp_path = path.with_suffix(".tmp")
+    with temp_path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
+    temp_path.replace(path)
 
 
 @dataclass
