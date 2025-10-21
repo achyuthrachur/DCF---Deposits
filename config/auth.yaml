@@ -1,25 +1,25 @@
-﻿settings:
+settings:
   hash_iterations: 180000
 allowed_usernames: []
 allowed_emails:
-  - bhanu.sehgal@crowe.com
-  - ryan.michalik@crowe.com
-  - achyuth.rachur@crowe.com
+- bhanu.sehgal@crowe.com
+- ryan.michalik@crowe.com
+- achyuth.rachur@crowe.com
+- achyuth.rachur@gmail.com
 users:
-  - username: admin
-    name: Administrator
-    email: admin@example.com
-    salt: ""
-    password_hash: ""
-    active: false
+- username: Admin
+  name: Admin
+  email: achyuth.rachur@gmail.com
+  salt: e31d293a3438328d333070989b1b0071
+  password_hash: e7PNu15MPYX/TGgbgN9agwtncL9ZkLzIvjHitfmU6+Y=
+  active: true
 pending_tokens:
   activation: {}
   reset: {}
 smtp:
-  host: ""
+  host: smtp.gmail.com
   port: 587
-  username: ""
-  password_env: ""
-  from_email: ""
+  username: achyuth.rachur@gmail.com
+  password_env: SMTP_APP_PASSWORD
+  from_email: achyuth.rachur@gmail.com
   starttls: true
-

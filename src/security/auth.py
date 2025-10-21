@@ -50,7 +50,22 @@ class EmailNotifier:
 
     @property
     def enabled(self) -> bool:
-        return bool(self._config.get("host") and self._config.get("from_email"))
+        host = self._config.get("host")
+        from_email = self._config.get("from_email")
+        if not host or not from_email:
+            return False
+        username = self._config.get("username")
+        if not username:
+            return True
+        password_literal = self._config.get("password")
+        password_env = self._config.get("password_env")
+        if password_literal:
+            return True
+        if password_env:
+            password = os.environ.get(str(password_env))
+            if password:
+                return True
+        return False
 
     def send_token(self, *, to_address: str, subject: str, body: str) -> bool:
         if not self.enabled:
@@ -268,7 +283,10 @@ class AuthManager:
         if sent:
             message = "Activation email sent. Please check your inbox."
         else:
-            message = f"Activation token generated. Provide this code to the user: `{token}`"
+            message = (
+                "Activation email failed to send. Verify the SMTP credentials and share this token: "
+                f"`{token}`"
+            )
         return TokenDispatchResult(sent, token, message)
 
     def request_activation_by_email(self, email: str, notifier: EmailNotifier) -> TokenDispatchResult:
@@ -295,9 +313,13 @@ class AuthManager:
             subject="Deposit DCF dashboard activation",
             body=email_body + f"\n\nSuggested link: {activation_link}",
         )
-        message = (
-            "Activation email sent. Please check your inbox." if sent else f"Activation token: `{token}`"
-        )
+        if sent:
+            message = "Activation email sent. Please check your inbox."
+        else:
+            message = (
+                "Activation email failed to send. Verify the SMTP credentials and share this token: "
+                f"`{token}`"
+            )
         return TokenDispatchResult(sent, token, message)
 
     def complete_activation(self, token: str, password: str, display_name: Optional[str] = None) -> Tuple[bool, str]:
@@ -382,7 +404,10 @@ class AuthManager:
         if sent:
             message = "Password reset email sent."
         else:
-            message = f"Password reset token generated. Provide this code to the user: `{token}`"
+            message = (
+                "Password reset email failed to send. Verify the SMTP credentials and share this token: "
+                f"`{token}`"
+            )
         return TokenDispatchResult(sent, token, message)
 
     def complete_password_reset(self, token: str, password: str) -> Tuple[bool, str]:
