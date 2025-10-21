@@ -6,6 +6,7 @@ allowed_emails:
 - ryan.michalik@crowe.com
 - achyuth.rachur@crowe.com
 - achyuth.rachur@gmail.com
+- achyuth.v.rachur@gmail.com
 users:
 - username: Admin
   name: Admin
@@ -18,8 +19,12 @@ pending_tokens:
   reset: {}
 smtp:
   host: smtp.gmail.com
+  host_env: SMTP_HOST
   port: 587
+  port_env: SMTP_PORT
   username: achyuth.rachur@gmail.com
+  username_env: SMTP_USERNAME
   password_env: SMTP_APP_PASSWORD
   from_email: achyuth.rachur@gmail.com
+  from_email_env: SMTP_FROM_EMAIL
   starttls: true

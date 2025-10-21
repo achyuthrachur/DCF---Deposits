@@ -48,44 +48,61 @@ class EmailNotifier:
     def __init__(self, config: Dict[str, object]) -> None:
         self._config = config or {}
 
-    @property
-    def enabled(self) -> bool:
-        host = self._config.get("host")
-        from_email = self._config.get("from_email")
-        if not host or not from_email:
-            return False
-        username = self._config.get("username")
-        if not username:
-            return True
-        password_literal = self._config.get("password")
+    def _resolve(self, key: str) -> Optional[str]:
+        env_key = self._config.get(f"{key}_env")
+        if env_key:
+            env_value = os.environ.get(str(env_key))
+            if env_value:
+                return env_value
+        value = self._config.get(key)
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            return value
+        return str(value)
+
+    def _resolve_password(self) -> Optional[str]:
         password_env = self._config.get("password_env")
-        if password_literal:
-            return True
         if password_env:
             password = os.environ.get(str(password_env))
             if password:
-                return True
-        return False
+                return password
+        return self._resolve("password")
+
+    @property
+    def enabled(self) -> bool:
+        host = self._resolve("host")
+        from_email = self._resolve("from_email")
+        if not host or not from_email:
+            return False
+        username = self._resolve("username")
+        if not username:
+            return True
+        return bool(self._resolve_password())
 
     def send_token(self, *, to_address: str, subject: str, body: str) -> bool:
         if not self.enabled:
             return False
-        host = str(self._config["host"])
-        port = int(self._config.get("port", 587))
-        username = self._config.get("username")
-        password_env = self._config.get("password_env")
-        password_literal = self._config.get("password")
-        password = None
-        if password_env:
-            password = os.environ.get(str(password_env))
-        if not password:
-            password = password_literal
+        host = self._resolve("host")
+        from_email = self._resolve("from_email")
+        port_value = self._resolve("port")
+        if port_value is None:
+            port_value = self._config.get("port", 587)
+        try:
+            port = int(port_value)
+        except (ValueError, TypeError):
+            port = 587
+        username = self._resolve("username")
+        password = self._resolve_password()
         if username and not password:
             return False
 
         msg = EmailMessage()
         msg["Subject"] = subject
-        msg["From"] = self._config["from_email"]
+        msg["From"] = from_email
         msg["To"] = to_address
         msg.set_content(body)
 
