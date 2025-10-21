@@ -1,0 +1,65 @@
+{
+  "field_map": {
+    "account_id": "account_id",
+    "balance": "balance",
+    "interest_rate": "interest_rate"
+  },
+  "optional_fields": [],
+  "segmentation": "all",
+  "assumptions": {
+    "ALL": {
+      "decay_rate": 0.18,
+      "wal_years": 5.0,
+      "deposit_beta_up": 0.5,
+      "deposit_beta_down": 0.2,
+      "repricing_beta_up": 1.0,
+      "repricing_beta_down": 1.0,
+      "decay_priority": "auto"
+    }
+  },
+  "projection_settings": {
+    "projection_months": 24,
+    "max_projection_months": 24,
+    "materiality_threshold": 0.0
+  },
+  "scenario_flags": {
+    "base": true
+  },
+  "discount_config": {
+    "mode": "single",
+    "rate": 0.03
+  },
+  "base_market_path": [
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.03
+  ],
+  "monte_carlo_config": null,
+  "package_options": {
+    "enabled": false
+  },
+  "report_title": "Test Run",
+  "job_id": "8652dacecb4e4aeb8d7a80c877dd49cc",
+  "data_path": "accounts.parquet"
+}

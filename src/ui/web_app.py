@@ -8,10 +8,9 @@ import os
 import logging
 import base64
 import json
-import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -28,7 +27,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import FRED_API_KEY
-from src.runtime.analysis_runner import AnalysisRunner, ProgressEvent
+from src.jobs import (
+    AnalysisJobHandle,
+    cleanup_job_artifacts,
+    launch_analysis_job,
+    load_job_bundle,
+    load_job_results,
+    read_job_status,
+)
 from src.security.auth import AuthManager
 
 st.cache_data.clear()
@@ -238,6 +244,7 @@ from src.core.yield_curve import YieldCurve
 from src.core.monte_carlo import MonteCarloConfig, MonteCarloLevel, VasicekParams
 from src.core.decay import resolve_decay_parameters
 from src.reporting import InMemoryReportBuilder
+from src.utils.numbers import decimalize
 from src.visualization import (
     create_monte_carlo_dashboard,
     create_rate_path_animation,
@@ -371,16 +378,6 @@ def _default_for_segment(segment: str) -> Dict[str, float]:
             return defaults
     return DEFAULT_ASSUMPTIONS["checking"]
 
-
-def _decimalize(value: Optional[float]) -> Optional[float]:
-    """Convert percentage-based inputs to decimals."""
-    if value is None:
-        return None
-    if value > 1.5:
-        return float(value / 100.0)
-    return float(value)
-
-
 def _select_sample_months(actual_months: Optional[int]) -> List[int]:
     """Return representative months for sample cash flow output."""
     if not actual_months:
@@ -390,6 +387,84 @@ def _select_sample_months(actual_months: Optional[int]) -> List[int]:
     if actual_months not in months:
         months.append(actual_months)
     return sorted(set(months))
+
+
+def _build_analysis_payload(
+    *,
+    field_map: Dict[str, str],
+    optional_fields: Iterable[str],
+    segmentation: str,
+    assumptions: Dict[str, Dict[str, Any]],
+    projection_months: int,
+    max_projection_months: int,
+    materiality_threshold: float,
+    scenario_flags: Dict[str, bool],
+    discount_config: Dict[str, Any],
+    base_market_path: Iterable[float],
+    monte_carlo_config: Optional[MonteCarloConfig],
+    package_options: Dict[str, Any],
+    selected_curve: Optional[YieldCurve],
+    report_title: str = "Deposit Analysis",
+) -> Dict[str, Any]:
+    """Serialize the current analysis configuration for the background worker."""
+
+    assumptions_payload: Dict[str, Dict[str, Any]] = {}
+    for segment_key, values in assumptions.items():
+        assumptions_payload[segment_key] = {
+            "decay_rate": float(values["decay_rate"]) if values.get("decay_rate") is not None else None,
+            "wal_years": float(values["wal_years"]) if values.get("wal_years") is not None else None,
+            "deposit_beta_up": float(values.get("deposit_beta_up", 0.0)),
+            "deposit_beta_down": float(values.get("deposit_beta_down", 0.0)),
+            "repricing_beta_up": float(values.get("repricing_beta_up", 0.0)),
+            "repricing_beta_down": float(values.get("repricing_beta_down", 0.0)),
+            "decay_priority": values.get("decay_priority", "auto"),
+        }
+
+    discount_payload: Dict[str, Any] = {"mode": discount_config.get("mode")}
+    if discount_config.get("mode") == "single":
+        discount_payload["rate"] = float(discount_config.get("rate", 0.0))
+    elif discount_config.get("mode") == "manual":
+        discount_payload["tenor_rates"] = {
+            int(k): float(v) for k, v in discount_config.get("tenor_rates", {}).items()
+        }
+        discount_payload["interpolation"] = discount_config.get("interpolation", "linear")
+    elif discount_config.get("mode") == "fred":
+        discount_payload["api_key"] = discount_config.get("api_key")
+        discount_payload["interpolation"] = discount_config.get("interpolation", "linear")
+        discount_payload["target_date"] = discount_config.get("target_date")
+
+    curve_snapshot: Optional[Dict[str, Any]] = None
+    if selected_curve is not None:
+        curve_snapshot = {
+            "tenors": [int(t) for t in selected_curve.tenors],
+            "rates": [float(r) for r in selected_curve.rates],
+            "interpolation": selected_curve.interpolation_method,
+            "metadata": getattr(selected_curve, "metadata", {}),
+        }
+    discount_payload["curve_snapshot"] = curve_snapshot
+
+    monte_carlo_metadata = (
+        monte_carlo_config.to_metadata() if isinstance(monte_carlo_config, MonteCarloConfig) else None
+    )
+
+    payload: Dict[str, Any] = {
+        "field_map": field_map,
+        "optional_fields": list(optional_fields or []),
+        "segmentation": segmentation,
+        "assumptions": assumptions_payload,
+        "projection_settings": {
+            "projection_months": int(projection_months),
+            "max_projection_months": int(max_projection_months),
+            "materiality_threshold": float(materiality_threshold),
+        },
+        "scenario_flags": scenario_flags,
+        "discount_config": discount_payload,
+        "base_market_path": [float(value) for value in base_market_path],
+        "monte_carlo_config": monte_carlo_metadata,
+        "package_options": package_options,
+        "report_title": report_title,
+    }
+    return payload
 
 
 def _build_cashflow_sample_table(
@@ -1255,12 +1330,10 @@ def main() -> None:
         layout="wide",
     )
 
-    if "analysis_runner" not in st.session_state:
-        st.session_state["analysis_runner"] = AnalysisRunner()
-    if "analysis_progress" not in st.session_state:
-        st.session_state["analysis_progress"] = None
-    if "pending_analysis" not in st.session_state:
-        st.session_state["pending_analysis"] = None
+    if "active_job" not in st.session_state:
+        st.session_state["active_job"] = None
+    if "analysis_metadata" not in st.session_state:
+        st.session_state["analysis_metadata"] = None
     if "analysis_status_message" not in st.session_state:
         st.session_state["analysis_status_message"] = None
 
@@ -1868,7 +1941,7 @@ def main() -> None:
                 value = st.text_input(label, key=f"tenor_{tenor}")
             if value.strip():
                 try:
-                    tenor_values[tenor] = _decimalize(float(value.strip()))
+                    tenor_values[tenor] = decimalize(float(value.strip()))
                 except ValueError:
                     st.error(f"Invalid numeric value for {label}.")
                     return
@@ -1976,243 +2049,111 @@ def main() -> None:
         "cashflow_mode": cashflow_mode,
         "cashflow_sample_size": int(cashflow_sample_size),
     }
-    run_clicked = st.button("Run Analysis", type="primary")
+    active_job_info = st.session_state.get("active_job")
+    run_clicked = st.button("Run Analysis", type="primary", disabled=bool(active_job_info))
 
     results = st.session_state.get("run_results")
-    runner: AnalysisRunner = st.session_state["analysis_runner"]
     progress_text_placeholder = st.empty()
     progress_bar_placeholder = st.empty()
 
     if run_clicked:
-        if runner.running:
-            st.warning("An analysis is already in progress. Please wait for it to complete before starting another run.")
+        if active_job_info:
+            st.warning("An analysis job is already running. Please wait for it to finish before starting another.")
         else:
             package_opts = st.session_state.get("download_package_options", {})
-            engine = ALMEngine()
             try:
-                engine.load_dataframe(
-                    dataframe=df_raw,
+                payload = _build_analysis_payload(
                     field_map=st.session_state["field_map"],
                     optional_fields=st.session_state.get("optional_fields", []),
+                    segmentation=segmentation,
+                    assumptions=assumptions,
+                    projection_months=int(projection_months),
+                    max_projection_months=int(max_projection_months),
+                    materiality_threshold=float(materiality_threshold),
+                    scenario_flags=scenario_flags,
+                    discount_config=discount_config,
+                    base_market_path=base_market_path,
+                    monte_carlo_config=monte_carlo_config,
+                    package_options=package_opts,
+                    selected_curve=selected_curve,
+                    report_title="Deposit Analysis",
                 )
-                engine.set_segmentation(segmentation)
-                for segment_key, values in assumptions.items():
-                    decay_rate_value = (
-                        _decimalize(values["decay_rate"]) if values.get("decay_rate") is not None else None
-                    )
-                    engine.set_assumptions(
-                        segment_key=segment_key,
-                        decay_rate=decay_rate_value,
-                        wal_years=values["wal_years"],
-                        deposit_beta_up=_decimalize(values["deposit_beta_up"]),
-                        deposit_beta_down=_decimalize(values["deposit_beta_down"]),
-                        repricing_beta_up=_decimalize(values["repricing_beta_up"]),
-                        repricing_beta_down=_decimalize(values["repricing_beta_down"]),
-                        decay_priority=values.get("decay_priority", "auto"),
-                    )
-                mode = discount_config.get("mode")
-                if mode == "single":
-                    engine.set_discount_single_rate(_decimalize(discount_config["rate"]))
-                elif mode == "manual":
-                    engine.set_discount_yield_curve(
-                        {int(k): _decimalize(v) for k, v in discount_config["tenor_rates"].items()},
-                        interpolation_method=discount_config.get("interpolation", "linear"),
-                        source="manual",
-                    )
-                elif mode == "fred":
-                    fred_api_key = discount_config.get("api_key") or os.environ.get("FRED_API_KEY", FRED_API_KEY)
-                    interpolation = discount_config.get("interpolation", "linear")
-                    target_date = discount_config.get("target_date")
-                    if fred_api_key:
-                        engine.set_discount_curve_from_fred(
-                            fred_api_key,
-                            interpolation_method=interpolation,
-                            target_date=target_date,
-                        )
-                    else:
-                        curve_snapshot = st.session_state.get("fred_curve_snapshot")
-                        if not curve_snapshot:
-                            st.error("Fetch a FRED curve or provide an API key before running analysis.")
-                            return
-                        engine.set_discount_curve(curve_snapshot, source="fred")
-                base_market_path = st.session_state.get(
-                    "base_market_path",
-                    [0.03] * int(max_projection_months),
-                )
-                engine.set_base_market_rate_path(base_market_path)
-                if monte_carlo_config:
-                    engine.set_monte_carlo_config(monte_carlo_config)
-                engine.configure_standard_scenarios(scenario_flags)
-                try:
-                    discount_config_obj = engine.discount_configuration()
-                except Exception:
-                    discount_config_obj = None
-                analysis_metadata = {
-                    "run_timestamp": datetime.utcnow().isoformat(),
-                    "segmentation_method": engine.segmentation_method,
-                    "projection_settings": {
-                        "base_months": int(projection_months),
-                        "max_months": int(max_projection_months),
-                        "materiality_threshold": float(materiality_threshold),
-                    },
-                    "scenario_flags": scenario_flags,
-                    "monte_carlo_config": (
-                        monte_carlo_config.to_metadata()
-                        if isinstance(monte_carlo_config, MonteCarloConfig)
-                        else None
-                    ),
-                    "assumptions": assumptions,
-                    "field_map": st.session_state.get("field_map", {}),
-                    "discount_selection": discount_config,
-                    "base_market_path": base_market_path,
-                    "download_package_options": package_opts,
-                }
-                try:
-                    analysis_metadata["portfolio"] = {
-                        "account_count": len(engine.accounts),
-                        "total_balance": float(sum(acc.balance for acc in engine.accounts)),
-                    }
-                except Exception:
-                    pass
-                if selected_curve:
-                    analysis_metadata["selected_curve"] = {
-                        "tenors": [int(t) for t in selected_curve.tenors],
-                        "rates": [float(r) for r in selected_curve.rates],
-                        "interpolation": selected_curve.interpolation_method,
-                    }
-
-                def run_task(progress_reporter: Callable[[int, int, str], None]) -> "EngineResults":
-                    def _progress(step: int, total: int, message: str) -> None:
-                        progress_reporter(step, total, message)
-                    return engine.run_analysis(
-                        projection_months=int(projection_months),
-                        materiality_threshold=float(materiality_threshold),
-                        max_projection_months=int(max_projection_months),
-                        progress_callback=_progress,
-                    )
-
-                st.session_state["pending_analysis"] = {
-                    "package_opts": package_opts,
-                    "analysis_metadata": analysis_metadata,
-                    "discount_config": discount_config_obj,
-                    "builder_title": "Deposit Analysis",
-                }
-                runner.start(run_task)
-                st.session_state["analysis_progress"] = ProgressEvent(
-                    step=0,
-                    total=1,
-                    message="Starting analysis...",
-                    timestamp=time.time(),
-                )
-                st.info("Analysis started. Progress updates will appear below.")
-            except ValueError as exc:
-                message = str(exc)
-                if "Invalid rate(s) detected" in message:
-                    details = message.replace("Invalid rate(s) detected for ", "Affected tenors: ")
-                    _render_invalid_rate_message(discount_method, details)
-                else:
-                    st.error(f"Unexpected numeric error: {exc}")
-                st.session_state.pop("run_results", None)
-                st.session_state["pending_analysis"] = None
-                return
-            except ValidationError as exc:
-                st.error(f"Validation error during execution: {exc}")
-                st.session_state["pending_analysis"] = None
-                return
-            except Exception as exc:  # pragma: no cover - guard rail
-                st.error(f"Unexpected error: {exc}")
-                st.session_state["pending_analysis"] = None
+            except Exception as exc:
+                st.error(f"Unable to prepare analysis payload: {exc}")
                 return
 
-    for event in runner.drain_progress():
-        st.session_state["analysis_progress"] = event
+            handle = launch_analysis_job(payload, df_raw)
+            st.session_state["active_job"] = {
+                "job_id": handle.job_id,
+                "job_dir": str(handle.job_dir),
+            }
+            st.session_state["run_results"] = None
+            st.session_state["latest_bundle"] = None
+            st.session_state["analysis_metadata"] = None
+            st.session_state["analysis_status_message"] = "Job dispatched."
+            st.success("Analysis job started. Progress updates will appear below.")
+            active_job_info = st.session_state["active_job"]
 
-    progress_event: Optional[ProgressEvent] = st.session_state.get("analysis_progress")
-    if progress_event:
-        pct = int((progress_event.step / max(progress_event.total, 1)) * 100)
-        progress_text_placeholder.markdown(f"**{progress_event.message}**")
-        progress_bar_placeholder.progress(min(100, pct))
-    elif runner.running:
-        progress_text_placeholder.markdown("**Analysis running...**")
-        progress_bar_placeholder.progress(0)
-    else:
-        progress_text_placeholder.empty()
-        progress_bar_placeholder.empty()
-
-    if runner.done and st.session_state.get("pending_analysis") is not None:
-        error: Optional[BaseException] = runner.exception()
-        analysis_result: Optional["EngineResults"] = None
-        if error is None:
+    if active_job_info:
+        handle = AnalysisJobHandle(
+            job_id=active_job_info["job_id"],
+            job_dir=Path(active_job_info["job_dir"]),
+        )
+        status = read_job_status(handle)
+        total_steps = max(status.total, 1)
+        progress_pct = min(100, int((status.step / total_steps) * 100))
+        progress_bar_placeholder.progress(progress_pct)
+        progress_text_placeholder.markdown(f"**{status.message or 'Running analysis...'}**")
+        if status.state == "completed":
             try:
-                analysis_result = runner.result()
-            except Exception as exc:  # pragma: no cover - guard rail
-                error = exc
-        runner.reset()
-        if error is not None:
-            st.session_state["analysis_progress"] = None
-            st.session_state["pending_analysis"] = None
-            st.error(f"Analysis failed: {error}")
-            LOGGER.error("Background analysis failed", exc_info=error)
-        elif analysis_result is not None:
-            st.session_state["run_results"] = analysis_result
-            st.session_state["analysis_progress"] = None
-            pending = st.session_state.get("pending_analysis") or {}
-            st.session_state["pending_analysis"] = None
-            progress_text_placeholder.markdown("**Analysis complete! Preparing visualisations...**")
-            progress_bar_placeholder.progress(100)
-            results = analysis_result
-            st.success("Analysis complete! Scroll down to explore the visualisations.")
-            package_opts = pending.get("package_opts", {}) or {}
-            if package_opts.get("enabled", False):
-                try:
-                    builder = InMemoryReportBuilder(
-                        base_title=pending.get("builder_title", "Deposit Analysis")
+                results_obj = load_job_results(handle)
+                st.session_state["run_results"] = results_obj
+                extras = status.extras or {}
+                st.session_state["analysis_metadata"] = extras.get("analysis_metadata")
+                bundle_info = load_job_bundle(handle)
+                if bundle_info:
+                    st.session_state["latest_bundle"] = bundle_info
+                cleanup_job_artifacts(handle)
+                st.session_state["analysis_status_message"] = "Analysis complete! Preparing visualisations..."
+            except Exception as exc:
+                st.error(f"Analysis completed but results could not be loaded: {exc}")
+                st.session_state["analysis_status_message"] = f"Error loading results: {exc}"
+            finally:
+                st.session_state["active_job"] = None
+                progress_bar_placeholder.progress(100)
+                if st.session_state.get("analysis_status_message"):
+                    progress_text_placeholder.markdown(
+                        f"**{st.session_state['analysis_status_message']}**"
                     )
-                    bundle = builder.build(
-                        analysis_result,
-                        discount_config=pending.get("discount_config"),
-                        analysis_metadata=pending.get("analysis_metadata", {}),
-                        export_cashflows=package_opts.get("export_cashflows", False),
-                        cashflow_mode=package_opts.get("cashflow_mode", "sample"),
-                        cashflow_sample_size=int(package_opts.get("cashflow_sample_size", 20)),
-                        cashflow_random_state=42,
+        elif status.state == "failed":
+            st.session_state["active_job"] = None
+            st.session_state["analysis_status_message"] = "Analysis failed."
+            progress_text_placeholder.markdown("**Analysis failed**")
+            progress_bar_placeholder.progress(0)
+            st.error("Background analysis failed. Review the error details below.")
+            if status.error:
+                with st.expander("Job error details", expanded=False):
+                    st.code(status.error)
+        else:
+            if st_autorefresh is not None:
+                st_autorefresh(interval=1000, key="analysis_auto_refresh")
+            else:  # pragma: no cover - legacy fallback
+                rerun = getattr(st, "rerun", None)
+                if callable(rerun):
+                    rerun()
+                else:
+                    st.markdown(
+                        "<script>setTimeout(function(){window.location.reload();}, 1000);</script>",
+                        unsafe_allow_html=True,
                     )
-                    st.session_state["latest_bundle"] = {
-                        "zip_bytes": bundle.zip_bytes,
-                        "zip_name": bundle.zip_name,
-                        "excel_name": bundle.excel_name,
-                        "word_name": bundle.word_name,
-                        "manifest": bundle.manifest,
-                        "token": bundle.created_at.isoformat(),
-                    }
-                    st.session_state.pop("latest_bundle_error", None)
-                    st.success(
-                        "Download package ready. Your browser should start the download automatically."
-                    )
-                except Exception as bundle_exc:  # pragma: no cover
-                    LOGGER.warning("Download packaging failed: %s", bundle_exc)
-                    st.session_state["latest_bundle_error"] = str(bundle_exc)
-    elif runner.running:
-        # Background analysis still in progress; request the frontend to refresh periodically.
-        progress_event = st.session_state.get("analysis_progress")
-        progress_value = 0
-        if progress_event and progress_event.total:
-            progress_value = min(
-                100, int((progress_event.step / max(progress_event.total, 1)) * 100)
-            )
-        progress_bar_placeholder.progress(progress_value)
-        if st_autorefresh is not None:
-            st_autorefresh(interval=500, key="analysis_auto_refresh")
-        else:  # pragma: no cover - legacy fallback
-            # `st.rerun` is available in modern Streamlit; fall back to client-side reload otherwise.
-            rerun = getattr(st, "rerun", None)
-            if callable(rerun):
-                rerun()
-            else:
-                st.markdown(
-                    "<script>setTimeout(function(){window.location.reload();}, 750);</script>",
-                    unsafe_allow_html=True,
-                )
+    else:
+        if st.session_state.get("analysis_status_message"):
+            progress_text_placeholder.markdown(f"**{st.session_state['analysis_status_message']}**")
+            progress_bar_placeholder.progress(100 if results else 0)
+        else:
+            progress_text_placeholder.empty()
+            progress_bar_placeholder.empty()
+
     results = st.session_state.get("run_results")
     bundle_info = st.session_state.get("latest_bundle")
     bundle_error = st.session_state.pop("latest_bundle_error", None)

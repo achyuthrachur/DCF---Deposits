@@ -1,0 +1,11 @@
+{
+  "id": "b9d44e78dfed408d829102a8d733dc6a",
+  "state": "dispatched",
+  "message": "Job dispatched to worker process.",
+  "step": 0,
+  "total": 1,
+  "started_at": "2025-10-21T20:01:22.765016+00:00",
+  "updated_at": "2025-10-21T20:01:22.866384+00:00",
+  "pid": 8696,
+  "extras": {}
+}
