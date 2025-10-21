@@ -912,7 +912,9 @@ class ALMEngine:
             if progress_callback and total_accounts > 0:
                 scenario_span = total_accounts * config.num_simulations
                 scenario_cap = min(step_offset + scenario_span, total_steps)
-                chunk_size = max(1, total_accounts // 200)
+                max_updates_per_sim = 20
+                chunk_size = max(1, total_accounts // max_updates_per_sim)
+                last_account_progress = step_offset + sim_index * total_accounts
 
                 def account_progress_cb(
                     account_idx: int,
@@ -922,10 +924,14 @@ class ALMEngine:
                     *,
                     chunk: int = chunk_size,
                 ) -> None:
+                    nonlocal last_account_progress
                     if account_idx % chunk != 0 and account_idx != account_total:
                         return
                     base_progress = step_offset + sim_index * total_accounts + min(account_idx, account_total)
+                    if base_progress <= last_account_progress:
+                        return
                     safe_progress = min(base_progress, scenario_cap)
+                    last_account_progress = safe_progress
                     detail = (
                         f"Scenario {scenario_index}/{total_scenarios}: "
                         f"simulation {sim_index + 1}/{config.num_simulations} "
