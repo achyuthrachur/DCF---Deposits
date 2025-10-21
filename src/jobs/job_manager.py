@@ -33,7 +33,8 @@ def _read_json(path: Path) -> Dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as fh:
             return json.load(fh)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError):
+        # File may be in the middle of being written by another process; treat as empty.
         return {}
 
 

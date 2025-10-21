@@ -1,0 +1,11 @@
+{
+  "id": "6f730c05b9834480bd51be28b090dc38",
+  "state": "running",
+  "message": "Scenario 1/13: account 2503/20000 (ACC00002503)",
+  "step": 2503,
+  "total": 20240000,
+  "started_at": "2025-10-21T21:57:36.126555+00:00",
+  "updated_at": "2025-10-21T21:58:01.207358+00:00",
+  "pid": 3752,
+  "extras": {}
+}
