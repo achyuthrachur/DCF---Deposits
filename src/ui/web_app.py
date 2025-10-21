@@ -148,14 +148,13 @@ def _ensure_authenticated() -> bool:
 
     with activate_tab.expander("Request activation link", expanded=True):
         with st.form("activation_request", clear_on_submit=True):
-            req_username = st.text_input("Username", key="activation_username")
             req_email = st.text_input("Email", key="activation_email")
             send_request = st.form_submit_button("Send activation email")
         if send_request:
-            if not req_username or not req_email:
-                st.error("Provide both username and email to request activation.")
+            if not req_email:
+                st.error("Provide an email address to request activation.")
             else:
-                result = auth_manager.request_activation(req_username, req_email, notifier)
+                result = auth_manager.request_activation_by_email(req_email, notifier)
                 if result.sent:
                     st.success(result.message)
                 else:
@@ -163,18 +162,22 @@ def _ensure_authenticated() -> bool:
 
     with activate_tab.form("activation_complete", clear_on_submit=True):
         token_value = st.text_input("Activation token")
+        desired_username = st.text_input("Choose a username", key="activation_desired_username")
         display_name = st.text_input("Display name (optional)")
         new_password = st.text_input("Create password", type="password")
         confirm_password = st.text_input("Confirm password", type="password")
         complete_activation = st.form_submit_button("Activate account")
     if complete_activation:
-        if new_password != confirm_password:
+        if not desired_username:
+            st.error("Choose a username to complete activation.")
+        elif new_password != confirm_password:
             st.error("Passwords do not match.")
         elif len(new_password) < 8:
             st.error("Please choose a password with at least 8 characters.")
         else:
-            success, message = auth_manager.complete_activation(
+            success, message = auth_manager.complete_activation_with_username(
                 token_value,
+                desired_username,
                 new_password,
                 display_name=display_name or None,
             )
