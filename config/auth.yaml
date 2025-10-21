@@ -1,6 +1,6 @@
 ﻿settings:
   hash_iterations: 180000
-allowed_usernames: []
+allowed_usernames: [achyuthrachur]
 allowed_emails: [achyuth.rachur@crowe.com]
 users:
   - username: admin
