@@ -2187,6 +2187,10 @@ def main() -> None:
                 except Exception as bundle_exc:  # pragma: no cover
                     LOGGER.warning("Download packaging failed: %s", bundle_exc)
                     st.session_state["latest_bundle_error"] = str(bundle_exc)
+    elif runner.running:
+        # Background analysis still in progress; trigger a lightweight rerun to refresh progress indicators.
+        time.sleep(0.2)
+        st.rerun()
     results = st.session_state.get("run_results")
     bundle_info = st.session_state.get("latest_bundle")
     bundle_error = st.session_state.pop("latest_bundle_error", None)
