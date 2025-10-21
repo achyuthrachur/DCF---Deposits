@@ -1405,13 +1405,48 @@ def main() -> None:
         }
         .stApp .stNumberInput input,
         .stApp .stTextInput input,
-        .stApp textarea {
-            color: #0f2d63 !important;
+        .stApp textarea,
+        .stApp div[data-baseweb="input"] input {
+            background: rgba(255, 255, 255, 0.12) !important;
+            border: 1px solid rgba(244, 247, 255, 0.45) !important;
+            color: #f7faff !important;
+        }
+        .stApp .stNumberInput input::placeholder,
+        .stApp .stTextInput input::placeholder,
+        .stApp textarea::placeholder,
+        .stApp div[data-baseweb="input"] input::placeholder {
+            color: rgba(247, 250, 255, 0.72) !important;
         }
         .stApp div[data-baseweb="select"] span,
         .stApp .stMultiSelect div[data-baseweb="tag"] span,
         .stApp div[data-baseweb="select"] input {
-            color: #0f2d63 !important;
+            color: #f7faff !important;
+        }
+        .stApp .stMultiSelect div[data-baseweb="tag"] {
+            background: rgba(255, 255, 255, 0.18) !important;
+            border: 1px solid rgba(244, 247, 255, 0.35) !important;
+        }
+        .stApp div[data-baseweb="select"] div[role="button"] {
+            background: rgba(255, 255, 255, 0.12) !important;
+            border: 1px solid rgba(244, 247, 255, 0.45) !important;
+            color: #f7faff !important;
+        }
+        .stApp div[data-baseweb="select"] div[role="button"]:hover,
+        .stApp div[data-baseweb="select"] div[role="button"]:focus,
+        .stApp .stNumberInput input:focus,
+        .stApp .stTextInput input:focus,
+        .stApp textarea:focus {
+            border-color: #ffc94b !important;
+            box-shadow: 0 0 0 2px rgba(255, 201, 75, 0.35) !important;
+        }
+        .stApp div[data-baseweb="popover"] {
+            background: rgba(7, 20, 52, 0.95) !important;
+            color: #f7faff !important;
+            border: 1px solid rgba(244, 247, 255, 0.35) !important;
+        }
+        .stApp div[data-baseweb="popover"] li,
+        .stApp div[data-baseweb="popover"] span {
+            color: #f7faff !important;
         }
         .stApp .stFormSubmitButton > button {
             background: linear-gradient(135deg, #ffc94b, #f0a500);

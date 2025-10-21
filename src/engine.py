@@ -809,7 +809,6 @@ class ALMEngine:
         projector: CashflowProjector,
         settings: ProjectionSettings,
         *,
-        pv_calculator: Optional[PresentValueCalculator] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         step_offset: int = 0,
         total_steps: int = 1,
@@ -996,24 +995,18 @@ class ALMEngine:
                 description="Monte Carlo simulation path",
             )
 
-            cashflows = projector.project(
+            projection_totals = projector.project_aggregate(
                 self.accounts,
                 sim_scenario,
                 mc_settings,
             )
 
-            pv_calculator = PresentValueCalculator(discount_curve)
-            pv_value = pv_calculator.portfolio_pv(cashflows)
+            pv_value = projection_totals.portfolio_pv(discount_curve)
             pv_values[sim_index] = pv_value
 
-            monthly_totals = (
-                cashflows.groupby("month")[["principal", "interest", "total_cash_flow"]]
-                .sum()
-                .reindex(months_range, fill_value=0.0)
-            )
-            principal_sum += monthly_totals["principal"].to_numpy()
-            interest_sum += monthly_totals["interest"].to_numpy()
-            total_sum += monthly_totals["total_cash_flow"].to_numpy()
+            principal_sum += projection_totals.principal[:months]
+            interest_sum += projection_totals.interest[:months]
+            total_sum += projection_totals.total_cash_flow[:months]
 
             cumulative_series = pd.Series(pv_values[: sim_index + 1])
             cumulative_mean = float(cumulative_series.mean())
