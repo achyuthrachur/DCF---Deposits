@@ -142,7 +142,7 @@ def _ensure_authenticated() -> bool:
                 "remember": remember_me,
             }
             st.success(f"Welcome back, {user.name}!")
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Invalid username or password.")
 
@@ -971,7 +971,7 @@ def _reset_discount_defaults(discount_method: str) -> None:
         st.session_state["discount_method_choice"] = "Single rate"
         st.session_state["single_rate_input"] = DEFAULT_SINGLE_RATE
     st.session_state.pop("run_results", None)
-    st.experimental_rerun()
+    st.rerun()
 
 
 def _render_rate_adjustment_controls(discount_method: str) -> None:
@@ -1259,7 +1259,7 @@ def main() -> None:
             st.markdown(f"**Signed in as {auth_user['name']}**")
         if st.button("Sign out"):
             st.session_state["auth_user"] = None
-            st.experimental_rerun()
+            st.rerun()
 
     st.markdown(
         """
