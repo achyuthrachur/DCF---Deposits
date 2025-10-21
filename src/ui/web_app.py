@@ -17,6 +17,11 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+try:
+    from streamlit import st_autorefresh
+except ImportError:  # pragma: no cover - older Streamlit
+    st_autorefresh = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -2188,13 +2193,7 @@ def main() -> None:
                     LOGGER.warning("Download packaging failed: %s", bundle_exc)
                     st.session_state["latest_bundle_error"] = str(bundle_exc)
     elif runner.running:
-        # Background analysis still in progress; trigger a lightweight rerun to refresh progress indicators.
-        sentinel_path = PROJECT_ROOT / "config" / "rerun_sentinel"
-        try:
-            sentinel_path.parent.mkdir(parents=True, exist_ok=True)
-            sentinel_path.write_bytes(str(time.time()).encode("utf-8"))
-        except Exception:
-            pass
+        # Background analysis still in progress; request the frontend to refresh periodically.
         progress_event = st.session_state.get("analysis_progress")
         progress_value = 0
         if progress_event and progress_event.total:
@@ -2202,8 +2201,18 @@ def main() -> None:
                 100, int((progress_event.step / max(progress_event.total, 1)) * 100)
             )
         progress_bar_placeholder.progress(progress_value)
-        time.sleep(0.2)
-        st.experimental_rerun()
+        if st_autorefresh is not None:
+            st_autorefresh(interval=500, key="analysis_auto_refresh")
+        else:  # pragma: no cover - legacy fallback
+            # `st.rerun` is available in modern Streamlit; fall back to client-side reload otherwise.
+            rerun = getattr(st, "rerun", None)
+            if callable(rerun):
+                rerun()
+            else:
+                st.markdown(
+                    "<script>setTimeout(function(){window.location.reload();}, 750);</script>",
+                    unsafe_allow_html=True,
+                )
     results = st.session_state.get("run_results")
     bundle_info = st.session_state.get("latest_bundle")
     bundle_error = st.session_state.pop("latest_bundle_error", None)
