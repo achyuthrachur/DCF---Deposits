@@ -8,6 +8,7 @@ written to an ``output`` folder next to the EXE.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -38,7 +39,7 @@ def _pick_file() -> Path | None:
 
     # Fallback to plain input
     try:
-        path_str = input("Enter path to accounts CSV: ").strip()
+        path_str = input("Enter path to input data (CSV or Excel): ").strip()
         return Path(path_str) if path_str else None
     except EOFError:
         return None
@@ -61,6 +62,8 @@ def main() -> None:
 
     print("\nDCF – Deposits Desktop Runner")
     print("--------------------------------")
+    exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
+    os.environ.setdefault("APP_OUTPUT_ROOT", str(exe_dir / "output"))
 
     # Pick file
     csv_path = _pick_file()

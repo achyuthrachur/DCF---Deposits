@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+import importlib.util
 
 
 def _ensure_paths() -> Path:
@@ -24,13 +25,19 @@ def _ensure_paths() -> Path:
 def main() -> None:
     src_path = _ensure_paths()
 
+    exe_dir = Path(getattr(sys, 'frozen', False) and Path(sys.executable).resolve().parent or Path.cwd())
+    os.environ.setdefault("APP_OUTPUT_ROOT", str(exe_dir / "output"))
+
     os.environ.setdefault("APP_DESKTOP_MODE", "1")
     os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
     os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "true")
     os.environ.setdefault("STREAMLIT_SERVER_ADDRESS", "localhost")
     os.environ.setdefault("STREAMLIT_SERVER_PORT", "8501")
 
-    script = str(src_path / "ui" / "web_app.py")
+    spec = importlib.util.find_spec("src.ui.web_app")
+    if spec is None or not spec.origin:
+        raise RuntimeError("Unable to locate src.ui.web_app module inside bundle.")
+    script = spec.origin
 
     import streamlit.web.cli as stcli
 

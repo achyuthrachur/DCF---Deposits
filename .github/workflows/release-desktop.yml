@@ -41,6 +41,8 @@ jobs:
             --collect-all streamlit \
             --paths . \
             --paths src \
+            --add-data "src;src" \
+            --add-data "config;config" \
             src/desktop/ui_launcher.py
         shell: bash
 

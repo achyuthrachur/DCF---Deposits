@@ -1670,6 +1670,9 @@ def main() -> None:
     if brand_html:
         st.markdown(brand_html, unsafe_allow_html=True)
 
+    if IS_DESKTOP_MODE:
+        st.info("Desktop mode: calculations run on this machine and outputs are saved under the `output` folder next to the application.")
+
     st.markdown(
         """
         <div class="hero-card">

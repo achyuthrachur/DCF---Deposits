@@ -21,7 +21,9 @@ from src.reporting import InMemoryReportBuilder
 from src.models.results import EngineResults
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-JOB_ROOT = PROJECT_ROOT / "output" / "jobs"
+OUTPUT_ROOT = Path(os.environ.get("APP_OUTPUT_ROOT", PROJECT_ROOT / "output"))
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+JOB_ROOT = OUTPUT_ROOT / "jobs"
 
 
 def _utc_now_iso() -> str:
