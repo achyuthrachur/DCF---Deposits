@@ -86,13 +86,15 @@ def _gh_headers(cfg: GHConfig) -> Dict[str, str]:
     }
 
 
-def _gh_put_contents(cfg: GHConfig, path: str, content_bytes: bytes, message: str) -> None:
+def _gh_put_contents(cfg: GHConfig, path: str, content_bytes: bytes, message: str, *, sha: Optional[str] = None) -> None:
     url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/contents/{path}"
     payload = {
         "message": message,
         "content": base64.b64encode(content_bytes).decode("utf-8"),
         "branch": cfg.results_branch,
     }
+    if sha:
+        payload["sha"] = sha
     r = requests.put(url, headers=_gh_headers(cfg), json=payload)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Failed to write {path}: {r.status_code} {r.text}")
@@ -128,6 +130,19 @@ def _gh_get_raw_file(cfg: GHConfig, path: str) -> Optional[bytes]:
     r = requests.get(url, headers=headers, params=params)
     if r.status_code == 200:
         return r.content
+    return None
+
+
+def _gh_get_file_sha(cfg: GHConfig, path: str) -> Optional[str]:
+    url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/contents/{path}"
+    params = {"ref": cfg.results_branch, "_": str(time.time_ns())}
+    r = requests.get(url, headers=_gh_headers(cfg), params=params)
+    if r.status_code == 200:
+        try:
+            data = r.json()
+            return data.get("sha")
+        except Exception:
+            return None
     return None
 
 
@@ -431,13 +446,18 @@ def cancel_job(handle: AnalysisJobHandle) -> None:
                 )
             except Exception:
                 pass
+            # Remove run_id to avoid confusing status updates later
+            extras.pop("run_id", None)
         job_status.state = "cancelled"
         job_status.message = "Cancellation requested by user."
+        job_status.extras = extras
         payload = job_status.to_dict()
         payload["updated_at"] = _utc_now_iso()
+        current_sha = _gh_get_file_sha(cfg, f"{dir_path}/status.json")
         _gh_put_contents(
             cfg,
             f"{dir_path}/status.json",
             json.dumps(payload, indent=2).encode("utf-8"),
             message=f"Cancel job {handle.job_id} ({dir_path})",
+            sha=current_sha,
         )
