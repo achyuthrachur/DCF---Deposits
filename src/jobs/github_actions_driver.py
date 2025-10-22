@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import os
 import time
 import zipfile
@@ -26,6 +27,8 @@ from src.models.results import EngineResults
 
 
 GH_API = "https://api.github.com"
+
+LOGGER = logging.getLogger(__name__)
 
 
 STATUS_CACHE: Dict[str, JobStatus] = {}
