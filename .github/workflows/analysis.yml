@@ -1,0 +1,60 @@
+name: ALM Analysis (Remote Worker)
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Main job id
+        required: true
+      batch_dir:
+        description: Path in results branch for this batch (e.g., output/jobs/<job_id>/batch-1)
+        required: true
+      results_branch:
+        description: Branch that stores status.json and inputs
+        required: true
+        default: results
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    name: Run analysis batch
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkout results branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.results_branch }}
+          path: results
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run analysis worker
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          BATCH_DIR: ${{ inputs.batch_dir }}
+          RESULTS_DIR: results
+        run: |
+          python -m src.jobs.run --jobs-root "${RESULTS_DIR}" --batch-dir "${BATCH_DIR}" --job-id "${JOB_ID}"
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ inputs.job_id }}-${{ hashFiles(format('{0}/{1}/results.pkl', 'results', inputs.batch_dir)) }}
+          path: |
+            results/${{ inputs.batch_dir }}/results.pkl
+            results/${{ inputs.batch_dir }}/bundle.zip
+          if-no-files-found: warn

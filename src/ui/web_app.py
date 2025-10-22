@@ -40,6 +40,28 @@ from src.security.auth import AuthManager
 st.cache_data.clear()
 st.cache_resource.clear()
 
+# Configure GitHub driver from Streamlit secrets if provided
+try:
+    raw_secrets = getattr(st, "secrets", {})
+    gh_secrets = raw_secrets.get("github") if hasattr(raw_secrets, "get") else None
+    if gh_secrets:
+        os.environ.setdefault("GH_REPO", str(gh_secrets.get("repo", "")))
+        os.environ.setdefault("GH_TOKEN", str(gh_secrets.get("token", "")))
+        if gh_secrets.get("workflow"):
+            os.environ.setdefault("GH_WORKFLOW", str(gh_secrets.get("workflow")))
+        if gh_secrets.get("workflow_ref"):
+            os.environ.setdefault("GH_WORKFLOW_REF", str(gh_secrets.get("workflow_ref")))
+        if gh_secrets.get("results_branch"):
+            os.environ.setdefault("GH_RESULTS_BRANCH", str(gh_secrets.get("results_branch")))
+        if gh_secrets.get("max_sims_per_job"):
+            os.environ.setdefault("GH_MAX_SIMS_PER_JOB", str(gh_secrets.get("max_sims_per_job")))
+    # Allow flat secrets too
+    for key in ("GH_REPO", "GH_TOKEN", "GH_WORKFLOW", "GH_WORKFLOW_REF", "GH_RESULTS_BRANCH", "GH_MAX_SIMS_PER_JOB"):
+        if key in raw_secrets:
+            os.environ.setdefault(key, str(raw_secrets[key]))
+except Exception:
+    pass
+
 REPO_ROOT = PROJECT_ROOT.parent
 AUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth.yaml"
 LOGGER = logging.getLogger(__name__)
@@ -2113,6 +2135,32 @@ def main() -> None:
                 bundle_info = load_job_bundle(handle)
                 if bundle_info:
                     st.session_state["latest_bundle"] = bundle_info
+                else:
+                    # Build the package locally if remote worker did not provide it
+                    package_opts = st.session_state.get("download_package_options", {}) or {}
+                    if package_opts.get("enabled"):
+                        try:
+                            builder = InMemoryReportBuilder(base_title="Deposit Analysis")
+                            local_bundle = builder.build(
+                                results_obj,
+                                discount_config=None,
+                                analysis_metadata=st.session_state.get("analysis_metadata") or {},
+                                export_cashflows=bool(package_opts.get("export_cashflows", False)),
+                                cashflow_mode=str(package_opts.get("cashflow_mode", "sample")),
+                                cashflow_sample_size=int(package_opts.get("cashflow_sample_size", 20)),
+                                cashflow_random_state=42,
+                            )
+                            st.session_state["latest_bundle"] = {
+                                "zip_bytes": local_bundle.zip_bytes,
+                                "zip_name": local_bundle.zip_name,
+                                "excel_name": local_bundle.excel_name,
+                                "word_name": local_bundle.word_name,
+                                "manifest": local_bundle.manifest,
+                                "created_at": local_bundle.created_at.isoformat(),
+                                "token": local_bundle.created_at.isoformat(),
+                            }
+                        except Exception as bundle_exc:
+                            st.session_state["latest_bundle_error"] = str(bundle_exc)
                 cleanup_job_artifacts(handle)
                 st.session_state["analysis_status_message"] = "Analysis complete! Preparing visualisations..."
             except Exception as exc:
