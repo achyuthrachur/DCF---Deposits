@@ -21,7 +21,13 @@ def _gh_cfg() -> dict:
     gh = secrets.get("github", {}) if hasattr(secrets, "get") else {}
     repo = os.environ.get("GH_REPO") or gh.get("repo")
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or gh.get("token")
-    workflow = os.environ.get("GH_WORKFLOW") or gh.get("workflow", "release-desktop.yml")
+    workflow = (
+        os.environ.get("GH_DESKTOP_WORKFLOW")
+        or gh.get("desktop_workflow")
+        or gh.get("workflow")
+        or os.environ.get("GH_WORKFLOW")
+        or "release-desktop.yml"
+    )
     ref = os.environ.get("GH_WORKFLOW_REF") or gh.get("workflow_ref", "main")
     if not (repo and token):
         raise RuntimeError("GitHub repo/token not configured.")
