@@ -29,6 +29,7 @@ GH_API = "https://api.github.com"
 
 
 STATUS_CACHE: Dict[str, JobStatus] = {}
+INDEX_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _utc_now_iso() -> str:
@@ -212,6 +213,7 @@ def _read_index(cfg: GHConfig, job_id: str) -> Optional[Dict[str, Any]]:
 def _write_index(cfg: GHConfig, job_id: str, data: Dict[str, Any]) -> None:
     path = _job_index_path(cfg, job_id)
     _gh_put_contents(cfg, path, json.dumps(data, indent=2).encode("utf-8"), message=f"Init job {job_id}")
+    INDEX_CACHE[job_id] = data
 
 
 def _serialize_df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
@@ -343,10 +345,14 @@ def read_job_status(handle: AnalysisJobHandle) -> JobStatus:
     cfg = GHConfig.from_env()
     index = _read_index(cfg, handle.job_id)
     if not index:
-        cached = STATUS_CACHE.get(handle.job_id)
-        if cached is not None:
-            return cached
-        return JobStatus(id=handle.job_id, state="pending", message="Waiting for job index...")
+        index = INDEX_CACHE.get(handle.job_id)
+        if index is None:
+            cached = STATUS_CACHE.get(handle.job_id)
+            if cached is not None:
+                return cached
+            return JobStatus(id=handle.job_id, state="pending", message="Waiting for job index...")
+    else:
+        INDEX_CACHE[handle.job_id] = index
     batches = index.get("batches", [])
     total = 0
     step = 0
