@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
+import atexit
 import importlib.util
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
 
 
 def _ensure_paths() -> Path:
@@ -37,13 +40,32 @@ def main() -> None:
     spec = importlib.util.find_spec("src.ui.web_app")
     if spec is None or not spec.origin:
         raise RuntimeError("Unable to locate src.ui.web_app module inside bundle.")
-    script = spec.origin
+    script_path = Path(spec.origin)
+
+    if not script_path.exists():
+        temp_root = Path(tempfile.mkdtemp(prefix="dcf_desktop_streamlit_"))
+        stub_path = temp_root / "launch_web_app.py"
+        stub_path.write_text(
+            "import runpy\n"
+            f"runpy.run_module('{spec.name}', run_name='__main__')\n",
+            encoding="utf-8",
+        )
+
+        def _cleanup_tmp(path: Path = temp_root) -> None:
+            try:
+                shutil.rmtree(path, ignore_errors=True)
+            except Exception:
+                pass
+
+        atexit.register(_cleanup_tmp)
+        script_path = stub_path
 
     import streamlit.web.cli as stcli
 
+    script = str(script_path)
     sys.argv = ["streamlit", "run", script]
 
-    print("Launching DCF Deposits Desktop UI at http://localhost:8501 …")
+    print("Launching DCF Deposits Desktop UI at http://localhost:8501 ...")
     try:
         import threading
         import time
