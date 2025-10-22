@@ -2144,6 +2144,18 @@ def main() -> None:
             job_id=active_job_info["job_id"],
             job_dir=Path(active_job_info["job_dir"]),
         )
+        cancel_requested = st.button(
+            "Cancel Running Job",
+            type="secondary",
+            key="cancel_job_button",
+        )
+        if cancel_requested:
+            try:
+                jobs.cancel_job(handle)
+                st.session_state["analysis_status_message"] = "Cancellation requested. Waiting for remote worker to halt."
+                st.warning("Cancellation requested. Remote workflows may take a few seconds to stop.")
+            except Exception as cancel_exc:
+                st.error(f"Unable to cancel job: {cancel_exc}")
         status = jobs.read_job_status(handle)
         total_steps = max(status.total, 1)
         progress_pct = min(100, int((status.step / total_steps) * 100))
@@ -2196,6 +2208,12 @@ def main() -> None:
                     progress_text_placeholder.markdown(
                         f"**{st.session_state['analysis_status_message']}**"
                     )
+        elif status.state == "cancelled":
+            st.session_state["active_job"] = None
+            st.session_state["analysis_status_message"] = "Analysis cancelled."
+            progress_text_placeholder.markdown("**Analysis cancelled**")
+            progress_bar_placeholder.progress(0)
+            st.info("Analysis run was cancelled. You can start a new run when ready.")
         elif status.state == "failed":
             st.session_state["active_job"] = None
             st.session_state["analysis_status_message"] = "Analysis failed."

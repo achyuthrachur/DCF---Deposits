@@ -13,6 +13,7 @@ import os
 import time
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -25,6 +26,10 @@ from src.models.results import EngineResults
 
 
 GH_API = "https://api.github.com"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -404,3 +409,35 @@ def load_job_bundle(handle: AnalysisJobHandle) -> Optional[Dict[str, Any]]:
 def cleanup_job_artifacts(handle: AnalysisJobHandle) -> None:
     # No-op for remote driver; history retained in results branch
     return None
+
+
+def cancel_job(handle: AnalysisJobHandle) -> None:
+    cfg = GHConfig.from_env()
+    index = _read_index(cfg, handle.job_id) or {}
+    batches = index.get("batches", [])
+    for b in batches:
+        dir_path = b.get("dir")
+        if not dir_path:
+            continue
+        status_dict = _read_status_bytes(cfg, f"{dir_path}/status.json") or {}
+        job_status = JobStatus.from_dict({**status_dict, "id": handle.job_id})
+        extras = job_status.extras or {}
+        run_id = extras.get("run_id")
+        if run_id:
+            try:
+                requests.post(
+                    f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/actions/runs/{run_id}/cancel",
+                    headers=_gh_headers(cfg),
+                )
+            except Exception:
+                pass
+        job_status.state = "cancelled"
+        job_status.message = "Cancellation requested by user."
+        payload = job_status.to_dict()
+        payload["updated_at"] = _utc_now_iso()
+        _gh_put_contents(
+            cfg,
+            f"{dir_path}/status.json",
+            json.dumps(payload, indent=2).encode("utf-8"),
+            message=f"Cancel job {handle.job_id} ({dir_path})",
+        )

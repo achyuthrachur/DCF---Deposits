@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import signal
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -302,6 +303,20 @@ def _job_worker_entry(job_dir_str: str) -> None:
     except Exception as exc:  # pragma: no cover - defensive
         status_writer.mark_failed("Analysis failed.", traceback.format_exc())
         raise
+
+
+def cancel_job(handle: AnalysisJobHandle) -> None:
+    """Attempt to stop the local worker process for the given job."""
+
+    status = read_job_status(handle)
+    pid = status.pid
+    if pid:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except Exception:
+            pass
+    status_writer = JobStatusWriter(handle.status_path, handle.job_id)
+    status_writer.write(state="cancelled", message="Cancellation requested by user.")
 
 
 def _execute_analysis(

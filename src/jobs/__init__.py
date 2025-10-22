@@ -82,6 +82,15 @@ def cleanup_job_artifacts(*args: Any, **kwargs: Any):
     return _load_driver().cleanup_job_artifacts(*args, **kwargs)
 
 
+def cancel_job(*args: Any, **kwargs: Any):
+    driver = _load_driver()
+    cancel = getattr(driver, "cancel_job", None)
+    if cancel is None:
+        LOGGER.info("Active driver does not support cancellation.")
+        return None
+    return cancel(*args, **kwargs)
+
+
 __all__ = [
     "AnalysisJobHandle",
     "launch_analysis_job",
@@ -89,6 +98,7 @@ __all__ = [
     "load_job_results",
     "load_job_bundle",
     "cleanup_job_artifacts",
+    "cancel_job",
     "refresh_driver",
     "USING_GITHUB_DRIVER",
     "GITHUB_DRIVER_ERROR",
