@@ -43,6 +43,10 @@ def dispatch_desktop_build() -> str:
     url = f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/actions/workflows/{cfg['workflow']}/dispatches"
     payload = {"ref": cfg["ref"], "inputs": {"version": version}}
     r = requests.post(url, headers=_headers(cfg["token"]), json=payload, timeout=10)
+    if r.status_code == 422 and "Unexpected inputs" in r.text:
+        # Workflow expects no inputs; dispatch without them and let the
+        # workflow compute a tag from run_number.
+        r = requests.post(url, headers=_headers(cfg["token"]), json={"ref": cfg["ref"]}, timeout=10)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: {r.status_code} {r.text}")
     st.session_state["desktop_build"] = {
@@ -166,4 +170,3 @@ def render_desktop_build_expander() -> None:
             else:
                 if st_autorefresh is not None:
                     st_autorefresh(interval=5000, key="desktop_build_refresh")
-

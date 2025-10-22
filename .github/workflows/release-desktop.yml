@@ -43,8 +43,8 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: ${{ github.event.inputs.version }}
+          tag_name: ${{ github.event.inputs.version || format('v{0}', github.run_number) }}
+          name: ${{ github.event.inputs.version || format('v{0}', github.run_number) }}
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -52,3 +52,4 @@ jobs:
             dist/DCF-Deposits.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
