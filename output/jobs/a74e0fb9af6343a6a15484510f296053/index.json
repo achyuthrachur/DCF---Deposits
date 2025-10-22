@@ -1,0 +1,14 @@
+{
+  "job_id": "a74e0fb9af6343a6a15484510f296053",
+  "batches": [
+    {
+      "index": 0,
+      "dir": "output/jobs/a74e0fb9af6343a6a15484510f296053/batch-1"
+    },
+    {
+      "index": 1,
+      "dir": "output/jobs/a74e0fb9af6343a6a15484510f296053/batch-2"
+    }
+  ],
+  "created_at": 1761135007.1880336
+}
