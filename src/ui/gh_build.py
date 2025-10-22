@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
 import requests
@@ -45,25 +45,31 @@ def _headers(token: str) -> dict:
 
 def dispatch_desktop_build() -> str:
     cfg = _gh_cfg()
-    version = f"v{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    now = datetime.now(timezone.utc)
+    version = f"v{now.strftime('%Y%m%d_%H%M%S')}"
     url = f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/actions/workflows/{cfg['workflow']}/dispatches"
     payload = {"ref": cfg["ref"], "inputs": {"version": version}}
     r = requests.post(url, headers=_headers(cfg["token"]), json=payload, timeout=10)
+    use_run_tag = False
     if r.status_code == 422 and "Unexpected inputs" in r.text:
         # Workflow expects no inputs; dispatch without them and let the
         # workflow compute a tag from run_number.
         r = requests.post(url, headers=_headers(cfg["token"]), json={"ref": cfg["ref"]}, timeout=10)
+        version = None
+        use_run_tag = True
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: {r.status_code} {r.text}")
     st.session_state["desktop_build"] = {
         "version": version,
-        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "requested_at": now.isoformat(),
         "run_id": None,
+        "run_info": None,
+        "use_run_tag": use_run_tag,
     }
-    return version
+    return version or "auto-tag"
 
 
-def _find_recent_run() -> Optional[int]:
+def _find_recent_run(build: dict) -> Optional[dict]:
     cfg = _gh_cfg()
     url = (
         f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/actions/workflows/"
@@ -75,7 +81,12 @@ def _find_recent_run() -> Optional[int]:
     runs = r.json().get("workflow_runs", [])
     if not runs:
         return None
-    return runs[0].get("id")
+    target_time = datetime.fromisoformat(build["requested_at"]) - timedelta(seconds=5)
+    for run in runs:
+        created = datetime.strptime(run.get("created_at"), "%Y-%m-%dT%H:%M:%SZ")
+        if created >= target_time:
+            return run
+    return runs[0]
 
 
 def _poll_run_status(run_id: int) -> Tuple[str, Optional[str]]:
@@ -148,10 +159,11 @@ def render_desktop_build_expander() -> None:
         if build:
             run_id = build.get("run_id")
             if not run_id:
-                rid = _find_recent_run()
-                if rid:
-                    build["run_id"] = rid
-                    run_id = rid
+                run = _find_recent_run(build)
+                if run:
+                    build["run_id"] = run.get("id")
+                    build["run_info"] = run
+                    run_id = build["run_id"]
             status, conclusion = ("unknown", None)
             if run_id:
                 status, conclusion = _poll_run_status(run_id)
@@ -162,6 +174,9 @@ def render_desktop_build_expander() -> None:
             if status == "completed":
                 if conclusion == "success":
                     tag = build.get("version")
+                    if not tag:
+                        run_info = build.get("run_info") or {}
+                        tag = f"v{run_info.get('run_number')}"
                     asset = _release_asset_by_tag(tag) or _latest_release_asset()
                     if asset:
                         nm, url = asset
