@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
-from src.ui.gh_build import render_desktop_build_expander
+
 
 try:
     from streamlit import st_autorefresh
@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - older Streamlit
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from src.ui.gh_build import render_desktop_build_expander
 
 from src.config import FRED_API_KEY
 import src.jobs as jobs
