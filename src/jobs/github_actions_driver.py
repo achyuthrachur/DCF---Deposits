@@ -262,6 +262,7 @@ def launch_analysis_job(payload: Dict[str, Any], dataframe: pd.DataFrame) -> Ana
         )
         # Initial status
         init_status = JobStatus(id=f"{job_id}-b{idx+1}").to_dict()
+        init_status.setdefault("message", "Pending dispatch")
         _gh_put_contents(
             cfg,
             f"{batch_dir}/status.json",

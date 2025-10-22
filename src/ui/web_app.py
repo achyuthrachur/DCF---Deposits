@@ -34,6 +34,8 @@ from src.jobs import (
     load_job_bundle,
     load_job_results,
     read_job_status,
+    USING_GITHUB_DRIVER,
+    GITHUB_DRIVER_ERROR,
 )
 from src.security.auth import AuthManager
 
@@ -2015,6 +2017,16 @@ def main() -> None:
 
 
     st.markdown("### Step 4 - Download Package Options")
+    st.caption(
+        "Execution mode: GitHub Actions (remote worker)"
+        if USING_GITHUB_DRIVER
+        else "Execution mode: Local worker (runs inside the Streamlit container)"
+    )
+    if GITHUB_DRIVER_ERROR:
+        st.warning(
+            "GitHub Actions driver could not be initialised. Running locally instead. "
+            "Details: " + GITHUB_DRIVER_ERROR
+        )
     default_package_opts = st.session_state.get(
         "download_package_options",
         {
@@ -2117,11 +2129,16 @@ def main() -> None:
             st.session_state["active_job"] = {
                 "job_id": handle.job_id,
                 "job_dir": str(handle.job_dir),
+                "mode": "github" if USING_GITHUB_DRIVER else "local",
             }
             st.session_state["run_results"] = None
             st.session_state["latest_bundle"] = None
             st.session_state["analysis_metadata"] = None
-            st.session_state["analysis_status_message"] = "Job dispatched."
+            st.session_state["analysis_status_message"] = (
+                "Remote job submitted to GitHub Actions."
+                if USING_GITHUB_DRIVER
+                else "Job dispatched to local worker process."
+            )
             st.success("Analysis job started. Progress updates will appear below.")
             active_job_info = st.session_state["active_job"]
 
