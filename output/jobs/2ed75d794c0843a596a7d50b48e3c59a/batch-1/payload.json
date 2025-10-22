@@ -1,0 +1,159 @@
+{
+  "field_map": {
+    "account_id": "Account_ID",
+    "balance": "Current_Balance",
+    "interest_rate": "Current_Interest_Rate",
+    "account_type": "Account_Type",
+    "customer_segment": "Customer_Segment",
+    "rate_type": "Rate_Type"
+  },
+  "optional_fields": [
+    "account_type",
+    "customer_segment",
+    "rate_type"
+  ],
+  "segmentation": "all",
+  "assumptions": {
+    "ALL": {
+      "decay_rate": 0.1828,
+      "wal_years": 5.0,
+      "deposit_beta_up": 0.4,
+      "deposit_beta_down": 0.25,
+      "repricing_beta_up": 1.0,
+      "repricing_beta_down": 1.0,
+      "decay_priority": "decay"
+    }
+  },
+  "projection_settings": {
+    "projection_months": 36,
+    "max_projection_months": 60,
+    "materiality_threshold": 1000.0
+  },
+  "scenario_flags": {
+    "base": true,
+    "parallel_100": true,
+    "parallel_200": true,
+    "parallel_300": true,
+    "parallel_400": true,
+    "parallel_minus_100": true,
+    "parallel_minus_200": true,
+    "parallel_minus_300": true,
+    "parallel_minus_400": true,
+    "steepener": true,
+    "flattener": true,
+    "short_shock_up": true,
+    "monte_carlo": true
+  },
+  "discount_config": {
+    "mode": "fred",
+    "api_key": "1e6fab389233c8b91b63ab38b1639769",
+    "interpolation": "linear",
+    "target_date": null,
+    "curve_snapshot": {
+      "tenors": [
+        3,
+        6,
+        12,
+        24,
+        36,
+        60,
+        84,
+        120
+      ],
+      "rates": [
+        0.0397,
+        0.0378,
+        0.0355,
+        0.0346,
+        0.0347,
+        0.0358,
+        0.0377,
+        0.04
+      ],
+      "interpolation": "linear",
+      "metadata": {
+        "source": "fred",
+        "as_of": "2025-10-20",
+        "series_ids": [
+          "DGS3MO",
+          "DGS6MO",
+          "DGS1",
+          "DGS2",
+          "DGS3",
+          "DGS5",
+          "DGS7",
+          "DGS10"
+        ]
+      }
+    }
+  },
+  "base_market_path": [
+    0.0397,
+    0.0397,
+    0.0397,
+    0.039066666666666666,
+    0.03843333333333333,
+    0.0378,
+    0.03741666666666667,
+    0.037033333333333335,
+    0.03665,
+    0.03626666666666666,
+    0.03588333333333333,
+    0.0355,
+    0.035425,
+    0.03535,
+    0.035275,
+    0.035199999999999995,
+    0.035124999999999997,
+    0.03505,
+    0.034975,
+    0.0349,
+    0.034824999999999995,
+    0.034749999999999996,
+    0.034675,
+    0.0346,
+    0.03460833333333333,
+    0.034616666666666664,
+    0.034625,
+    0.034633333333333335,
+    0.03464166666666667,
+    0.03465,
+    0.03465833333333333,
+    0.034666666666666665,
+    0.034675,
+    0.03468333333333334,
+    0.03469166666666667,
+    0.0347
+  ],
+  "monte_carlo_config": {
+    "level": 2,
+    "num_simulations": 500,
+    "projection_months": 36,
+    "random_seed": null,
+    "short_rate": {
+      "mean_reversion": 0.15,
+      "long_term_mean": 0.0397,
+      "volatility": 0.01,
+      "initial_rate": null
+    },
+    "correlation": 0.7,
+    "save_rate_paths": true,
+    "generate_reports": true,
+    "sample_size": 100,
+    "interpolation_method": "linear",
+    "long_rate": {
+      "mean_reversion": 0.07,
+      "long_term_mean": 0.04,
+      "volatility": 0.008,
+      "initial_rate": null
+    }
+  },
+  "package_options": {
+    "enabled": true,
+    "export_cashflows": false,
+    "cashflow_mode": "sample",
+    "cashflow_sample_size": 20
+  },
+  "report_title": "Deposit Analysis",
+  "job_id": "2ed75d794c0843a596a7d50b48e3c59a"
+}
