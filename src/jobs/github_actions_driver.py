@@ -135,8 +135,16 @@ def _ensure_results_branch(cfg: GHConfig) -> None:
     r = requests.get(ref_url, headers=_gh_headers(cfg))
     if r.status_code == 200:
         return
-    base_ref_url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/git/ref/heads/{cfg.workflow_ref}"
+    base_branch = cfg.workflow_ref
+    base_ref_url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/git/ref/heads/{base_branch}"
     base = requests.get(base_ref_url, headers=_gh_headers(cfg))
+    if base.status_code != 200:
+        # Try falling back to the repository's default branch
+        repo_info = requests.get(f"{GH_API}/repos/{cfg.owner}/{cfg.repo}", headers=_gh_headers(cfg))
+        if repo_info.status_code == 200:
+            base_branch = repo_info.json().get("default_branch", base_branch)
+            base_ref_url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/git/ref/heads/{base_branch}"
+            base = requests.get(base_ref_url, headers=_gh_headers(cfg))
     if base.status_code != 200:
         raise RuntimeError(f"Base branch not found: {cfg.workflow_ref}")
     sha = base.json().get("object", {}).get("sha")
