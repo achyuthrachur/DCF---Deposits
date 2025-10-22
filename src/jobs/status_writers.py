@@ -40,6 +40,8 @@ class RepoJobStatusWriter(JobStatusWriter):
             self.branch = self.branch[len("refs/heads/"):]
         self._sha_cache: dict[str, str] = {}
         self._last_push_ts = 0.0
+        self._last_step: Optional[int] = None
+        self._last_state: Optional[str] = None
 
     def write(self, **updates: Any) -> JobStatus:
         status = super().write(**updates)
@@ -47,8 +49,23 @@ class RepoJobStatusWriter(JobStatusWriter):
             return status
 
         now = time.time()
-        if now - self._last_push_ts < 0.25:
-            return status  # Throttle API calls slightly
+        min_interval = 3.0 if status.state == "running" else 0.0
+        min_step_delta = max(1, (status.total or 0) // 100)
+        if min_step_delta <= 0:
+            min_step_delta = 1
+        if (
+            self._last_state == status.state
+            and self._last_step == status.step
+            and now - self._last_push_ts < min_interval
+        ):
+            return status
+        if (
+            status.state == "running"
+            and self._last_step is not None
+            and status.step - self._last_step < min_step_delta
+            and now - self._last_push_ts < min_interval
+        ):
+            return status
 
         rel_path = self._rel_path(self.status_path)
         payload_bytes = json.dumps(status.to_dict(), indent=2).encode("utf-8")
@@ -63,6 +80,8 @@ class RepoJobStatusWriter(JobStatusWriter):
             if new_sha:
                 self._sha_cache[rel_path] = new_sha
             self._last_push_ts = now
+            self._last_step = status.step
+            self._last_state = status.state
         except Exception as exc:  # pragma: no cover - best effort
             LOGGER.warning("Unable to publish status for %s: %s", self.job_id, exc)
         return status

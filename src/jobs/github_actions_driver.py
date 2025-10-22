@@ -122,6 +122,10 @@ def _gh_put_contents(
                 return content.get("sha")
             except Exception:
                 return None
+        if r.status_code == 403:
+            raise RuntimeError(
+                "GitHub API rate limit exceeded while writing %s. Please wait and retry." % path
+            )
         if r.status_code == 409 and attempt < attempts - 1:
             sha = _gh_get_file_sha(cfg, path)
             last_error = r.text
