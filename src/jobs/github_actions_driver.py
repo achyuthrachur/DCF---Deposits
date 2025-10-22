@@ -28,6 +28,9 @@ from src.models.results import EngineResults
 GH_API = "https://api.github.com"
 
 
+STATUS_CACHE: Dict[str, JobStatus] = {}
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -86,18 +89,43 @@ def _gh_headers(cfg: GHConfig) -> Dict[str, str]:
     }
 
 
-def _gh_put_contents(cfg: GHConfig, path: str, content_bytes: bytes, message: str, *, sha: Optional[str] = None) -> None:
+def _gh_put_contents(
+    cfg: GHConfig,
+    path: str,
+    content_bytes: bytes,
+    message: str,
+    *,
+    sha: Optional[str] = None,
+    attempts: int = 3,
+) -> Optional[str]:
     url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/contents/{path}"
-    payload = {
-        "message": message,
-        "content": base64.b64encode(content_bytes).decode("utf-8"),
-        "branch": cfg.results_branch,
-    }
-    if sha:
-        payload["sha"] = sha
-    r = requests.put(url, headers=_gh_headers(cfg), json=payload)
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"Failed to write {path}: {r.status_code} {r.text}")
+    last_error: Optional[str] = None
+    last_status: Optional[int] = None
+    for attempt in range(attempts):
+        payload = {
+            "message": message,
+            "content": base64.b64encode(content_bytes).decode("utf-8"),
+            "branch": cfg.results_branch,
+        }
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(url, headers=_gh_headers(cfg), json=payload)
+        last_status = r.status_code
+        if r.status_code in (200, 201):
+            try:
+                data = r.json()
+                content = data.get("content") or {}
+                return content.get("sha")
+            except Exception:
+                return None
+        if r.status_code == 409 and attempt < attempts - 1:
+            sha = _gh_get_file_sha(cfg, path)
+            last_error = r.text
+            time.sleep(0.3)
+            continue
+        last_error = r.text
+        break
+    raise RuntimeError(f"Failed to write {path}: {last_status} {last_error}")
 
 
 def _ensure_results_branch(cfg: GHConfig) -> None:
@@ -315,7 +343,9 @@ def read_job_status(handle: AnalysisJobHandle) -> JobStatus:
     cfg = GHConfig.from_env()
     index = _read_index(cfg, handle.job_id)
     if not index:
-        # Unknown job id
+        cached = STATUS_CACHE.get(handle.job_id)
+        if cached is not None:
+            return cached
         return JobStatus(id=handle.job_id, state="pending", message="Waiting for job index...")
     batches = index.get("batches", [])
     total = 0
@@ -354,6 +384,7 @@ def read_job_status(handle: AnalysisJobHandle) -> JobStatus:
         state = "running"
     message = "; ".join(message_parts) if message_parts else state
     st = JobStatus(id=handle.job_id, state=state, step=step, total=max(total, 1), message=message, extras=extras)
+    STATUS_CACHE[handle.job_id] = st
     return st
 
 
@@ -461,3 +492,4 @@ def cancel_job(handle: AnalysisJobHandle) -> None:
             message=f"Cancel job {handle.job_id} ({dir_path})",
             sha=current_sha,
         )
+        STATUS_CACHE[handle.job_id] = JobStatus.from_dict(payload)
