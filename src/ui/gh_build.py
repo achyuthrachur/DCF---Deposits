@@ -82,8 +82,11 @@ def _find_recent_run(build: dict) -> Optional[dict]:
     if not runs:
         return None
     target_time = datetime.fromisoformat(build["requested_at"]) - timedelta(seconds=5)
+    if target_time.tzinfo is None:
+        target_time = target_time.replace(tzinfo=timezone.utc)
     for run in runs:
         created = datetime.strptime(run.get("created_at"), "%Y-%m-%dT%H:%M:%SZ")
+        created = created.replace(tzinfo=timezone.utc)
         if created >= target_time:
             return run
     return runs[0]
