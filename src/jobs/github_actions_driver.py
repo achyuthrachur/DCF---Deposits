@@ -146,7 +146,11 @@ def _ensure_results_branch(cfg: GHConfig) -> None:
             base_ref_url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/git/ref/heads/{base_branch}"
             base = requests.get(base_ref_url, headers=_gh_headers(cfg))
     if base.status_code != 200:
-        raise RuntimeError(f"Base branch not found: {cfg.workflow_ref}")
+        LOGGER.warning(
+            "Unable to resolve base branch for results (workflow_ref='%s'). Assuming branch already exists.",
+            cfg.workflow_ref,
+        )
+        return
     sha = base.json().get("object", {}).get("sha")
     if not sha:
         raise RuntimeError("Unable to resolve base branch sha")
