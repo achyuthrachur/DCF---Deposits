@@ -1,10 +1,10 @@
 {
-  "id": "2ed75d794c0843a596a7d50b48e3c59a-b2",
-  "state": "running",
-  "message": "Scenario 1/13: account 38/20000 (ACC00000038)",
+  "id": "2ed75d794c0843a596a7d50b48e3c59a",
+  "state": "cancelled",
+  "message": "Cancellation requested by user.",
   "step": 38,
   "total": 10240000,
   "started_at": "2025-10-22T12:59:18.007810+00:00",
-  "updated_at": "2025-10-22T12:59:41.345058+00:00",
+  "updated_at": "2025-10-22T12:59:42.466329+00:00",
   "extras": {}
 }
