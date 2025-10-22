@@ -1,12 +1,10 @@
 {
-  "id": "2ed75d794c0843a596a7d50b48e3c59a-b1",
-  "state": "running",
-  "message": "Batch initialised.",
+  "id": "2ed75d794c0843a596a7d50b48e3c59a",
+  "state": "cancelled",
+  "message": "Cancellation requested by user.",
   "step": 0,
   "total": 1,
   "started_at": "2025-10-22T12:59:18.060436+00:00",
-  "updated_at": "2025-10-22T12:59:21.139208+00:00",
-  "extras": {
-    "run_id": "18716944622"
-  }
+  "updated_at": "2025-10-22T12:59:40.308463+00:00",
+  "extras": {}
 }
