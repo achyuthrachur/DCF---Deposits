@@ -114,9 +114,13 @@ def _ensure_results_branch(cfg: GHConfig) -> None:
 
 
 def _gh_get_raw_file(cfg: GHConfig, path: str) -> Optional[bytes]:
-    # Use raw.githubusercontent.com for public repos; but API also works with media type
-    url = f"https://raw.githubusercontent.com/{cfg.owner}/{cfg.repo}/{cfg.results_branch}/{path}"
-    r = requests.get(url)
+    """Fetch file contents for the results branch while bypassing CDN caching."""
+
+    url = f"{GH_API}/repos/{cfg.owner}/{cfg.repo}/contents/{path}"
+    headers = _gh_headers(cfg)
+    headers["Accept"] = "application/vnd.github.raw"
+    params = {"ref": cfg.results_branch, "_": str(time.time_ns())}
+    r = requests.get(url, headers=headers, params=params)
     if r.status_code == 200:
         return r.content
     return None
@@ -302,19 +306,24 @@ def read_job_status(handle: AnalysisJobHandle) -> JobStatus:
     extras: Dict[str, Any] = {"batches": []}
     for b in batches:
         dir_path = b.get("dir")
-        status = _read_status_bytes(cfg, f"{dir_path}/status.json") or {}
-        b_state = status.get("state", "pending")
-        b_step = int(status.get("step", 0) or 0)
-        b_total = int(status.get("total", 1) or 1)
+        status_dict = _read_status_bytes(cfg, f"{dir_path}/status.json") or {}
+        if not status_dict:
+            status_dict = {"id": handle.job_id, "state": "pending", "message": "Awaiting status update"}
+        else:
+            status_dict.setdefault("id", handle.job_id)
+        status_obj = JobStatus.from_dict(status_dict)
+        b_state = status_obj.state
+        b_step = status_obj.step
+        b_total = status_obj.total
         total += max(b_total, 1)
         step += max(min(b_step, b_total), 0)
         if b_state == "failed":
             any_failed = True
         if b_state not in {"completed", "failed"}:
             all_completed = False
-        msg = status.get("message") or b_state
+        msg = status_obj.message or b_state
         message_parts.append(f"batch {b.get('index', 0)+1}: {msg}")
-        run_id = ((status.get("extras") or {}).get("run_id"))
+        run_id = ((status_obj.extras or {}).get("run_id"))
         extras["batches"].append({"dir": dir_path, "state": b_state, "run_id": run_id})
 
     if any_failed:
@@ -363,8 +372,12 @@ def load_job_results(handle: AnalysisJobHandle) -> EngineResults:
     # Collect run_ids
     run_ids: List[str] = []
     for b in batches:
-        status = _read_status_bytes(cfg, f"{b.get('dir')}/status.json") or {}
-        run_id = ((status.get("extras") or {}).get("run_id"))
+        status_dict = _read_status_bytes(cfg, f"{b.get('dir')}/status.json") or {}
+        if not status_dict:
+            continue
+        status_obj = JobStatus.from_dict({**status_dict, "id": handle.job_id})
+        extras_dict = status_obj.extras or {}
+        run_id = extras_dict.get("run_id")
         if run_id:
             run_ids.append(str(run_id))
     # Download artifacts for each run
