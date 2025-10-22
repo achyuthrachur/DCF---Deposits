@@ -2014,6 +2014,11 @@ def main() -> None:
         if jobs.USING_GITHUB_DRIVER
         else "Execution mode: Local worker (runs inside the Streamlit container)"
     )
+    gh_repo_env = os.environ.get("GH_REPO", "")
+    gh_token_present = bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+    st.caption(
+        f"GitHub configuration detected → repo: {'set' if gh_repo_env else 'missing'}, token: {'present' if gh_token_present else 'missing'}"
+    )
     if jobs.GITHUB_DRIVER_ERROR:
         st.warning(
             "GitHub Actions driver could not be initialised. Running locally instead. "
