@@ -7,7 +7,10 @@ on:
         description: Release version tag (e.g., v0.1.0)
         required: true
 
-permissions:`n  contents: write`n`njobs:
+permissions:
+  contents: write
+
+jobs:
   build-windows:
     runs-on: windows-latest
     steps:
@@ -37,8 +40,8 @@ permissions:`n  contents: write`n`njobs:
           name: ${{ github.event.inputs.version }}
           draft: false
           prerelease: false
+          generate_release_notes: true
           files: |
             dist/DCF-Deposits.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
