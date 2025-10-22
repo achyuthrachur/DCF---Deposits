@@ -40,10 +40,17 @@ def _pick_file() -> Path | None:
 
 
 def main() -> None:
-    # Ensure project root is on path (works when bundled and when run from source)
-    base = Path(__file__).resolve().parents[2]
+    # Ensure project root (source or PyInstaller bundle) is on sys.path
+    if hasattr(sys, "_MEIPASS"):
+        base = Path(sys._MEIPASS)
+    else:
+        base = Path(__file__).resolve().parents[2]
+
     if str(base) not in sys.path:
         sys.path.insert(0, str(base))
+    src_path = base / "src"
+    if src_path.exists() and str(src_path) not in sys.path:
+        sys.path.insert(0, str(src_path))
 
     from src.ui.cli import run as cli_run  # import lazily after sys.path tweak
 

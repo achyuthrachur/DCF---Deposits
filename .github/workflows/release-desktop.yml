@@ -37,6 +37,8 @@ jobs:
             --collect-all matplotlib \
             --collect-all openpyxl \
             --collect-all docx \
+            --paths . \
+            --paths src \
             src/desktop/runner.py
         shell: bash
 
