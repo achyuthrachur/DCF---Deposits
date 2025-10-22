@@ -24,9 +24,9 @@ def _pick_file() -> Path | None:
             filename = filedialog.askopenfilename(
                 title="Select input data",
                 filetypes=[
-                    ("Data files", "*.csv *.xlsx *.xls"),
+                    ("Data files", ("*.csv", "*.xlsx", "*.xls")),
                     ("CSV files", "*.csv"),
-                    ("Excel files", "*.xlsx *.xls"),
+                    ("Excel files", ("*.xlsx", "*.xls")),
                     ("All files", "*.*"),
                 ],
             )
