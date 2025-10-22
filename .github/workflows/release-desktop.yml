@@ -28,9 +28,9 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build EXE with PyInstaller
+      - name: Build desktop UI
         run: |
-          pyinstaller --onefile --name "DCF-Deposits" \
+          pyinstaller --onefile --name "DCF-Deposits-UI" \
             --hidden-import=tkinter \
             --collect-all pandas \
             --collect-all numpy \
@@ -38,9 +38,10 @@ jobs:
             --collect-all openpyxl \
             --collect-all docx \
             --collect-all src \
+            --collect-all streamlit \
             --paths . \
             --paths src \
-            src/desktop/runner.py
+            src/desktop/ui_launcher.py
         shell: bash
 
       - name: Create release
@@ -52,7 +53,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            dist/DCF-Deposits.exe
+            dist/DCF-Deposits-UI.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

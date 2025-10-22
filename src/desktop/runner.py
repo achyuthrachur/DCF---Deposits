@@ -22,8 +22,13 @@ def _pick_file() -> Path | None:
             root = tk.Tk()
             root.withdraw()
             filename = filedialog.askopenfilename(
-                title="Select accounts CSV",
-                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                title="Select input data",
+                filetypes=[
+                    ("Data files", "*.csv *.xlsx *.xls"),
+                    ("CSV files", "*.csv"),
+                    ("Excel files", "*.xlsx *.xls"),
+                    ("All files", "*.*"),
+                ],
             )
             return Path(filename) if filename else None
         except Exception:

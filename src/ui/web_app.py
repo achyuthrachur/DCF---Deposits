@@ -17,6 +17,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 
+IS_DESKTOP_MODE = os.environ.get("APP_DESKTOP_MODE") == "1"
+
 
 try:
     from streamlit import st_autorefresh
@@ -1404,8 +1406,8 @@ def main() -> None:
             st.session_state["auth_user"] = None
             st.rerun()
 
-    # Provide authenticated desktop build/download portal
-    render_desktop_build_expander()
+    if not IS_DESKTOP_MODE:
+        render_desktop_build_expander()
 
     st.markdown(
         """
