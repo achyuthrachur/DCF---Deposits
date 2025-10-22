@@ -1,10 +1,10 @@
 {
   "id": "b318b1166515470f92e5e937d1df6bf7-b1",
   "state": "running",
-  "message": "Scenario 1/13: account 245/20000 (ACC00000245)",
-  "step": 245,
+  "message": "Scenario 1/13: account 246/20000 (ACC00000246)",
+  "step": 246,
   "total": 20240000,
   "started_at": "2025-10-22T11:55:49.199846+00:00",
-  "updated_at": "2025-10-22T11:58:37.781854+00:00",
+  "updated_at": "2025-10-22T11:58:38.460362+00:00",
   "extras": {}
 }
