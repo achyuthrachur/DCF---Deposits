@@ -1,4 +1,4 @@
-name: Build Windows Desktop App
+﻿name: Build Windows Desktop App
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
         description: Release version tag (e.g., v0.1.0)
         required: true
 
-jobs:
+permissions:`n  contents: write`n`njobs:
   build-windows:
     runs-on: windows-latest
     steps:
