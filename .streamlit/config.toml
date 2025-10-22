@@ -1,0 +1,3 @@
+# Disable file watcher to avoid inotify limit on Streamlit Cloud
+[server]
+fileWatcherType = "none"
