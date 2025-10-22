@@ -32,6 +32,8 @@ jobs:
         run: |
           pyinstaller --onefile --name "DCF-Deposits-UI" \
             --hidden-import=tkinter \
+            --hidden-import=pydantic \
+            --collect-submodules pydantic \
             --collect-all pandas \
             --collect-all numpy \
             --collect-all matplotlib \
