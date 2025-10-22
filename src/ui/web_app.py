@@ -27,16 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import FRED_API_KEY
-from src.jobs import (
-    AnalysisJobHandle,
-    cleanup_job_artifacts,
-    launch_analysis_job,
-    load_job_bundle,
-    load_job_results,
-    read_job_status,
-    USING_GITHUB_DRIVER,
-    GITHUB_DRIVER_ERROR,
-)
+import src.jobs as jobs
 from src.security.auth import AuthManager
 
 st.cache_data.clear()
@@ -61,6 +52,7 @@ try:
     for key in ("GH_REPO", "GH_TOKEN", "GH_WORKFLOW", "GH_WORKFLOW_REF", "GH_RESULTS_BRANCH", "GH_MAX_SIMS_PER_JOB"):
         if key in raw_secrets:
             os.environ.setdefault(key, str(raw_secrets[key]))
+    jobs.refresh_driver()
 except Exception:
     pass
 
@@ -2019,13 +2011,13 @@ def main() -> None:
     st.markdown("### Step 4 - Download Package Options")
     st.caption(
         "Execution mode: GitHub Actions (remote worker)"
-        if USING_GITHUB_DRIVER
+        if jobs.USING_GITHUB_DRIVER
         else "Execution mode: Local worker (runs inside the Streamlit container)"
     )
-    if GITHUB_DRIVER_ERROR:
+    if jobs.GITHUB_DRIVER_ERROR:
         st.warning(
             "GitHub Actions driver could not be initialised. Running locally instead. "
-            "Details: " + GITHUB_DRIVER_ERROR
+            "Details: " + jobs.GITHUB_DRIVER_ERROR
         )
     default_package_opts = st.session_state.get(
         "download_package_options",
@@ -2117,7 +2109,7 @@ def main() -> None:
                 return
 
             try:
-                handle = launch_analysis_job(payload, df_raw)
+                handle = jobs.launch_analysis_job(payload, df_raw)
             except Exception as exc:
                 LOGGER.exception("Failed to launch analysis job")
                 st.session_state["analysis_status_message"] = f"Dispatch failed: {exc}"
@@ -2129,36 +2121,36 @@ def main() -> None:
             st.session_state["active_job"] = {
                 "job_id": handle.job_id,
                 "job_dir": str(handle.job_dir),
-                "mode": "github" if USING_GITHUB_DRIVER else "local",
+                "mode": "github" if jobs.USING_GITHUB_DRIVER else "local",
             }
             st.session_state["run_results"] = None
             st.session_state["latest_bundle"] = None
             st.session_state["analysis_metadata"] = None
             st.session_state["analysis_status_message"] = (
                 "Remote job submitted to GitHub Actions."
-                if USING_GITHUB_DRIVER
+                if jobs.USING_GITHUB_DRIVER
                 else "Job dispatched to local worker process."
             )
             st.success("Analysis job started. Progress updates will appear below.")
             active_job_info = st.session_state["active_job"]
 
     if active_job_info:
-        handle = AnalysisJobHandle(
+        handle = jobs.AnalysisJobHandle(
             job_id=active_job_info["job_id"],
             job_dir=Path(active_job_info["job_dir"]),
         )
-        status = read_job_status(handle)
+        status = jobs.read_job_status(handle)
         total_steps = max(status.total, 1)
         progress_pct = min(100, int((status.step / total_steps) * 100))
         progress_bar_placeholder.progress(progress_pct)
         progress_text_placeholder.markdown(f"**{status.message or 'Running analysis...'}**")
         if status.state == "completed":
             try:
-                results_obj = load_job_results(handle)
+                results_obj = jobs.load_job_results(handle)
                 st.session_state["run_results"] = results_obj
                 extras = status.extras or {}
                 st.session_state["analysis_metadata"] = extras.get("analysis_metadata")
-                bundle_info = load_job_bundle(handle)
+                bundle_info = jobs.load_job_bundle(handle)
                 if bundle_info:
                     st.session_state["latest_bundle"] = bundle_info
                 else:
@@ -2187,7 +2179,7 @@ def main() -> None:
                             }
                         except Exception as bundle_exc:
                             st.session_state["latest_bundle_error"] = str(bundle_exc)
-                cleanup_job_artifacts(handle)
+                jobs.cleanup_job_artifacts(handle)
                 st.session_state["analysis_status_message"] = "Analysis complete! Preparing visualisations..."
             except Exception as exc:
                 st.error(f"Analysis completed but results could not be loaded: {exc}")
