@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version tag (e.g., v0.1.0)
-        required: true
+        description: Release version tag (optional; leave blank for auto-tag)
+        required: false
 
 permissions:
   contents: write
@@ -52,4 +52,5 @@ jobs:
             dist/DCF-Deposits.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
