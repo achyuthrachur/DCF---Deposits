@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
+from src.ui.gh_build import render_desktop_build_expander
 
 try:
     from streamlit import st_autorefresh
@@ -1401,6 +1402,9 @@ def main() -> None:
         if st.button("Sign out"):
             st.session_state["auth_user"] = None
             st.rerun()
+
+    # Provide authenticated desktop build/download portal
+    render_desktop_build_expander()
 
     st.markdown(
         """

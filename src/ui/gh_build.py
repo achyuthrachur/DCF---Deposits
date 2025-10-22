@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Optional, Tuple
+
+import requests
+import streamlit as st
+
+try:  # pragma: no cover - optional auto refresh
+    from streamlit import st_autorefresh  # type: ignore
+except Exception:  # pragma: no cover
+    st_autorefresh = None  # type: ignore
+
+
+GH_API = "https://api.github.com"
+
+
+def _gh_cfg() -> dict:
+    secrets = getattr(st, "secrets", {})
+    gh = secrets.get("github", {}) if hasattr(secrets, "get") else {}
+    repo = os.environ.get("GH_REPO") or gh.get("repo")
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or gh.get("token")
+    workflow = os.environ.get("GH_WORKFLOW") or gh.get("workflow", "release-desktop.yml")
+    ref = os.environ.get("GH_WORKFLOW_REF") or gh.get("workflow_ref", "main")
+    if not (repo and token):
+        raise RuntimeError("GitHub repo/token not configured.")
+    owner, name = repo.split("/", 1)
+    return {"owner": owner, "repo": name, "token": token, "workflow": workflow, "ref": ref}
+
+
+def _headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def dispatch_desktop_build() -> str:
+    cfg = _gh_cfg()
+    version = f"v{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    url = f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/actions/workflows/{cfg['workflow']}/dispatches"
+    payload = {"ref": cfg["ref"], "inputs": {"version": version}}
+    r = requests.post(url, headers=_headers(cfg["token"]), json=payload, timeout=10)
+    if r.status_code not in (201, 204):
+        raise RuntimeError(f"workflow_dispatch failed: {r.status_code} {r.text}")
+    st.session_state["desktop_build"] = {
+        "version": version,
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "run_id": None,
+    }
+    return version
+
+
+def _find_recent_run() -> Optional[int]:
+    cfg = _gh_cfg()
+    url = (
+        f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/actions/workflows/"
+        f"{cfg['workflow']}/runs?event=workflow_dispatch&per_page=5"
+    )
+    r = requests.get(url, headers=_headers(cfg["token"]), timeout=10)
+    if r.status_code != 200:
+        return None
+    runs = r.json().get("workflow_runs", [])
+    if not runs:
+        return None
+    return runs[0].get("id")
+
+
+def _poll_run_status(run_id: int) -> Tuple[str, Optional[str]]:
+    cfg = _gh_cfg()
+    r = requests.get(
+        f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/actions/runs/{run_id}",
+        headers=_headers(cfg["token"]),
+        timeout=10,
+    )
+    if r.status_code != 200:
+        return "unknown", None
+    data = r.json()
+    return data.get("status", "unknown"), data.get("conclusion")
+
+
+def _latest_release_asset() -> Optional[Tuple[str, str]]:
+    cfg = _gh_cfg()
+    r = requests.get(
+        f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/releases/latest",
+        headers=_headers(cfg["token"]),
+        timeout=10,
+    )
+    if r.status_code != 200:
+        return None
+    for asset in r.json().get("assets", []):
+        nm = (asset.get("name") or "").lower()
+        if nm.endswith(".exe") and ("dcf" in nm or "deposits" in nm):
+            return asset.get("name") or "Windows Installer", asset.get("browser_download_url")
+    return None
+
+
+def _release_asset_by_tag(tag: str) -> Optional[Tuple[str, str]]:
+    cfg = _gh_cfg()
+    r = requests.get(
+        f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/releases/tags/{tag}",
+        headers=_headers(cfg["token"]),
+        timeout=10,
+    )
+    if r.status_code != 200:
+        return None
+    for asset in r.json().get("assets", []):
+        nm = (asset.get("name") or "").lower()
+        if nm.endswith(".exe") and ("dcf" in nm or "deposits" in nm):
+            return asset.get("name") or "Windows Installer", asset.get("browser_download_url")
+    return None
+
+
+def render_desktop_build_expander() -> None:
+    with st.expander("Build / Download Desktop App (Windows)", expanded=False):
+        latest = None
+        try:
+            latest = _latest_release_asset()
+        except Exception:
+            latest = None
+        if latest:
+            name, url = latest
+            try:
+                st.link_button(f"Download {name}", url)
+            except Exception:
+                st.markdown(f"[Download {name}]({url})")
+
+        if st.button("Build latest installer", type="primary"):
+            try:
+                version = dispatch_desktop_build()
+                st.success(f"Build dispatched for {version}.")
+            except Exception as exc:
+                st.error(f"Dispatch failed: {exc}")
+
+        build = st.session_state.get("desktop_build")
+        if build:
+            run_id = build.get("run_id")
+            if not run_id:
+                rid = _find_recent_run()
+                if rid:
+                    build["run_id"] = rid
+                    run_id = rid
+            status, conclusion = ("unknown", None)
+            if run_id:
+                status, conclusion = _poll_run_status(run_id)
+            label = f"Build status: {status}" + (f" / {conclusion}" if conclusion else "")
+            st.write(label)
+            pct = {"queued": 5, "in_progress": 60, "completed": 100}.get(status, 10)
+            st.progress(pct)
+            if status == "completed":
+                if conclusion == "success":
+                    tag = build.get("version")
+                    asset = _release_asset_by_tag(tag) or _latest_release_asset()
+                    if asset:
+                        nm, url = asset
+                        st.success("Installer ready.")
+                        try:
+                            st.link_button(f"Download {nm}", url)
+                        except Exception:
+                            st.markdown(f"[Download {nm}]({url})")
+                else:
+                    st.error("Build failed. Check GitHub Actions logs.")
+                st.session_state.pop("desktop_build", None)
+            else:
+                if st_autorefresh is not None:
+                    st_autorefresh(interval=5000, key="desktop_build_refresh")
+
