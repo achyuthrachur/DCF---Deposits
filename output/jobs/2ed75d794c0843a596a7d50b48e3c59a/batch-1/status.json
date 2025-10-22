@@ -1,10 +1,12 @@
 {
   "id": "2ed75d794c0843a596a7d50b48e3c59a-b1",
-  "state": "pending",
-  "message": "Job created",
+  "state": "running",
+  "message": "Batch initialised.",
   "step": 0,
   "total": 1,
   "started_at": "2025-10-22T12:59:18.060436+00:00",
-  "updated_at": "2025-10-22T12:59:18.060436+00:00",
-  "extras": {}
+  "updated_at": "2025-10-22T12:59:21.139208+00:00",
+  "extras": {
+    "run_id": "18716944622"
+  }
 }
