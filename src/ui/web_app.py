@@ -254,6 +254,43 @@ def _ensure_authenticated() -> bool:
 
     st.stop()
 
+def _latest_release_windows_asset(repo_full: str) -> tuple[str,str] | None:
+    try:
+        owner, repo = repo_full.split('/', 1)
+        r = requests.get(f'https://api.github.com/repos/{owner}/{repo}/releases/latest', timeout=8)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        for asset in data.get('assets', []):
+            name = (asset.get('name') or '').lower()
+            if name.endswith('.exe') and ('dcf' in name or 'deposits' in name):
+                return asset.get('name') or 'Windows Installer', asset.get('browser_download_url')
+    except Exception:
+        return None
+    return None
+
+
+def _render_desktop_download() -> None:
+    gh_repo = os.environ.get('GH_REPO')
+    if not gh_repo and hasattr(st, 'secrets'):
+        try:
+            gh_repo = st.secrets.get('github', {}).get('repo')
+        except Exception:
+            gh_repo = None
+    if not gh_repo:
+        return
+    with st.expander('Download Desktop App (Windows)', expanded=False):
+        asset = _latest_release_windows_asset(gh_repo)
+        if asset is None:
+            st.caption("Installer not available yet. Ask the maintainer to run the 'Build Windows Desktop App' workflow.")
+        else:
+            name, url = asset
+            st.write('Run locally with no Python install. Built with PyInstaller.')
+            try:
+                st.link_button(f'Download {name}', url)
+            except Exception:
+                st.markdown(f"[Download {name}]({url})")
+
 from src.core.validator import ValidationError
 from src.engine import ALMEngine
 from src.core.fred_loader import FREDYieldCurveLoader
@@ -1618,8 +1655,9 @@ def main() -> None:
         }
         </style>
         """,
-        unsafe_allow_html=True,
-    )
+        unsafe_allow_html=True)
+    _render_desktop_download()
+
 
     brand_html = _brand_logo_html()
     if brand_html:
@@ -1682,6 +1720,7 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    _render_desktop_download()
     uploaded_file = st.file_uploader(
         "Upload account-level data (CSV or Excel)", type=["csv", "xlsx", "xls"]
     )
@@ -2349,6 +2388,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
