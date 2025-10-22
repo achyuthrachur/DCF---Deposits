@@ -30,7 +30,14 @@ jobs:
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --name "DCF-Deposits" src/desktop/runner.py
+          pyinstaller --onefile --name "DCF-Deposits" \
+            --hidden-import=tkinter \
+            --collect-all pandas \
+            --collect-all numpy \
+            --collect-all matplotlib \
+            --collect-all openpyxl \
+            --collect-all docx \
+            src/desktop/runner.py
         shell: bash
 
       - name: Create release
