@@ -32,6 +32,11 @@ jobs:
           ref: ${{ inputs.results_branch }}
           path: results
 
+      - name: Configure git user
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@users.noreply.github.com"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

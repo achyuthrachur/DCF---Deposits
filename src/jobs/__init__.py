@@ -7,9 +7,12 @@ the GitHub driver is used; otherwise, falls back to local.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from .job_manager import AnalysisJobHandle as _LocalHandle
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _use_github() -> bool:
@@ -17,14 +20,25 @@ def _use_github() -> bool:
 
 
 if _use_github():
-    from .github_actions_driver import (  # type: ignore
-        launch_analysis_job,
-        read_job_status,
-        load_job_results,
-        load_job_bundle,
-        cleanup_job_artifacts,
-    )
-    AnalysisJobHandle = _LocalHandle
+    try:
+        from .github_actions_driver import (  # type: ignore
+            launch_analysis_job,
+            read_job_status,
+            load_job_results,
+            load_job_bundle,
+            cleanup_job_artifacts,
+        )
+        AnalysisJobHandle = _LocalHandle
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        LOGGER.warning("GitHub driver unavailable (%s); falling back to local worker.", exc)
+        from .job_manager import (
+            AnalysisJobHandle,
+            launch_analysis_job,
+            read_job_status,
+            load_job_results,
+            load_job_bundle,
+            cleanup_job_artifacts,
+        )
 else:
     from .job_manager import (
         AnalysisJobHandle,

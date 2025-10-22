@@ -2104,7 +2104,16 @@ def main() -> None:
                 st.error(f"Unable to prepare analysis payload: {exc}")
                 return
 
-            handle = launch_analysis_job(payload, df_raw)
+            try:
+                handle = launch_analysis_job(payload, df_raw)
+            except Exception as exc:
+                LOGGER.exception("Failed to launch analysis job")
+                st.session_state["analysis_status_message"] = f"Dispatch failed: {exc}"
+                st.error(
+                    "Unable to launch the background analysis job. Check GitHub credentials "
+                    "and workflow configuration, then try again."
+                )
+                return
             st.session_state["active_job"] = {
                 "job_id": handle.job_id,
                 "job_dir": str(handle.job_dir),
