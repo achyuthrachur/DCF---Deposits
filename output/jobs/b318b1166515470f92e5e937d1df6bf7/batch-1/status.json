@@ -1,12 +1,10 @@
 {
   "id": "b318b1166515470f92e5e937d1df6bf7-b1",
   "state": "running",
-  "message": "Batch initialised.",
+  "message": "Initializing scenario projections...",
   "step": 0,
-  "total": 1,
+  "total": 20240000,
   "started_at": "2025-10-22T11:55:49.199846+00:00",
-  "updated_at": "2025-10-22T11:55:49.929334+00:00",
-  "extras": {
-    "run_id": "18715298488"
-  }
+  "updated_at": "2025-10-22T11:55:53.076378+00:00",
+  "extras": {}
 }
