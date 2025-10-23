@@ -168,8 +168,14 @@ def render_desktop_build_expander() -> None:
                     build["run_info"] = run
                     run_id = build["run_id"]
             status, conclusion = ("unknown", None)
+            asset: Optional[Tuple[str, str]] = None
+            tag: Optional[str] = build.get("version")
             if run_id:
                 status, conclusion = _poll_run_status(run_id)
+            if tag:
+                asset = _release_asset_by_tag(tag)
+            if status != "completed" and asset:
+                status, conclusion = "completed", "success"
             label = f"Build status: {status}" + (f" / {conclusion}" if conclusion else "")
             st.write(label)
             pct = {"queued": 5, "in_progress": 60, "completed": 100}.get(status, 10)
@@ -180,7 +186,11 @@ def render_desktop_build_expander() -> None:
                     if not tag:
                         run_info = build.get("run_info") or {}
                         tag = f"v{run_info.get('run_number')}"
-                    asset = _release_asset_by_tag(tag) or _latest_release_asset()
+                    # reuse asset we may have already fetched while polling
+                    if not asset:
+                        asset = _release_asset_by_tag(tag) if tag else None
+                    if not asset:
+                        asset = _latest_release_asset()
                     if asset:
                         nm, url = asset
                         st.success("Installer ready.")
