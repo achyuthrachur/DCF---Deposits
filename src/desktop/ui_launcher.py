@@ -11,9 +11,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-for _opt_mod in ("pydantic", "pydantic_core", "fredapi"):
-    try:  # pragma: no cover - import hint for PyInstaller
-        importlib.import_module(_opt_mod)
+try:  # pragma: no cover - informs PyInstaller of runtime deps
+    import src.desktop._pyinstaller_hints  # type: ignore  # noqa: F401
+except Exception:
+    try:
+        import _pyinstaller_hints  # type: ignore  # noqa: F401
     except Exception:
         pass
 
