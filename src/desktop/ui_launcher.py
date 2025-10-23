@@ -37,14 +37,14 @@ def main() -> None:
     src_path = _ensure_paths()
 
     exe_dir = Path(getattr(sys, 'frozen', False) and Path(sys.executable).resolve().parent or Path.cwd())
-    os.environ.setdefault("APP_OUTPUT_ROOT", str(exe_dir / "output"))
+    os.environ["APP_OUTPUT_ROOT"] = str(exe_dir / "output")
 
-    os.environ.setdefault("APP_DESKTOP_MODE", "1")
-    os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
-    os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "true")
-    os.environ.setdefault("STREAMLIT_SERVER_ADDRESS", "localhost")
-    os.environ.setdefault("STREAMLIT_SERVER_PORT", "8501")
-    os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
+    os.environ["APP_DESKTOP_MODE"] = "1"
+    os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+    os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
+    os.environ["STREAMLIT_SERVER_ADDRESS"] = "localhost"
+    os.environ["STREAMLIT_SERVER_PORT"] = "8501"
+    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
 
     spec = importlib.util.find_spec("src.ui.web_app")
     if spec is None or not spec.origin:
