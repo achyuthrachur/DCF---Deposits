@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import importlib
 import importlib.util
 import os
 import shutil
@@ -10,6 +11,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+for _opt_mod in ("pydantic", "pydantic_core", "fredapi"):
+    try:  # pragma: no cover - import hint for PyInstaller
+        importlib.import_module(_opt_mod)
+    except Exception:
+        pass
 
 def _ensure_paths() -> Path:
     if hasattr(sys, "_MEIPASS"):

@@ -35,6 +35,8 @@ jobs:
             --hidden-import=pydantic \
             --collect-all pydantic \
             --collect-all pydantic_core \
+            --hidden-import=fredapi \
+            --collect-all fredapi \
             --collect-all pandas \
             --collect-all numpy \
             --collect-all matplotlib \
