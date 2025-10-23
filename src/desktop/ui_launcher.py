@@ -92,7 +92,14 @@ def main() -> None:
     import streamlit.web.cli as stcli
 
     script = str(script_path)
-    sys.argv = ["streamlit", "run", script]
+    sys.argv = [
+        "streamlit",
+        "run",
+        script,
+        "--server.headless=true",
+        f"--server.port={port}",
+        "--server.address=localhost",
+    ]
 
     print(f"Launching DCF Deposits Desktop UI at http://localhost:{port} ...")
     try:
