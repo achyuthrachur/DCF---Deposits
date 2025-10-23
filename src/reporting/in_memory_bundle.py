@@ -183,20 +183,38 @@ class InMemoryReportBuilder:
             return "-"
         if isinstance(value, float) and np.isnan(value):
             return "-"
+        name = column.lower()
         if isinstance(value, (np.integer, int)):
-            name = column.lower()
-            if any(token in name for token in ("pct", "percent")):
-                return f"{int(value):,}"
+            numeric = float(value)
+            if any(token in name for token in ("bps", "basis")):
+                return f"{numeric:.0f} bps"
+            if any(token in name for token in ("year", "years")):
+                return f"{numeric:,.2f} yrs"
             return f"{int(value):,}"
         if isinstance(value, (np.floating, float)):
-            name = column.lower()
-            if any(token in name for token in ("pct", "percent")):
-                return f"{value * 100:.2f}%"
-            if any(token in name for token in ("pv", "value", "balance", "delta")):
-                return f"${value:,.2f}"
-            return f"{value:,.4f}" if abs(value) < 1 else f"{value:,.2f}"
+            numeric = float(value)
+            if any(token in name for token in ("bps", "basis")):
+                return f"{numeric * 10000:.0f} bps"
+            if any(token in name for token in ("beta", "ratio", "pct", "percent", "decay", "rate", "shock")) and abs(numeric) <= 1.5:
+                return f"{numeric * 100:.2f}%"
+            if any(token in name for token in ("year", "years")):
+                return f"{numeric:,.2f} yrs"
+            if any(token in name for token in ("month", "months")):
+                return f"{numeric:,.0f} months"
+            if any(token in name for token in ("present_value", "pv", "balance", "amount", "notional", "cash", "value", "delta")):
+                return f"${numeric:,.2f}"
+            return f"{numeric:,.4f}" if abs(numeric) < 1 else f"{numeric:,.2f}"
         if isinstance(value, (datetime, pd.Timestamp)):
             return value.isoformat()
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, tuple, set)):
+            seq = list(value)
+            if not seq:
+                return "[]"
+            if all(isinstance(v, (int, float, np.integer, np.floating)) for v in seq):
+                return f"{len(seq)} values (min {min(seq):.2f}, max {max(seq):.2f})"
+            return f"{len(seq)} values"
         return str(value)
 
     @classmethod
@@ -225,7 +243,10 @@ class InMemoryReportBuilder:
         for _, row in display_df.iterrows():
             cells = table.add_row().cells
             for idx, column in enumerate(display_df.columns):
-                cells[idx].text = cls._format_value(str(column), row.iloc[idx])
+                context = str(column)
+                if column.lower() == "value" and "Field" in display_df.columns:
+                    context = str(row.get("Field", column))
+                cells[idx].text = cls._format_value(context, row.iloc[idx])
         document.add_paragraph("")
 
     def _excel_filename(self) -> str:
@@ -330,7 +351,43 @@ class InMemoryReportBuilder:
                 document.add_paragraph(f"Δ vs Base: {delta_str}{pct_str}")
             metadata_frame = details.get("metadata_frame")
             if metadata_frame is not None and not metadata_frame.empty:
-                self._add_dataframe_table(document, metadata_frame, caption="Scenario Metadata", max_rows=200)
+                filtered_metadata = metadata_frame.copy()
+                if "Field" in filtered_metadata.columns:
+                    filtered_metadata["Field"] = filtered_metadata["Field"].astype(str)
+                    fields = filtered_metadata["Field"].str.lower()
+                    exclude_mask = fields.str.contains(r"\[\d+\]") | fields.str.startswith("segments /")
+                    filtered_metadata = filtered_metadata[~exclude_mask]
+                    highlight_tokens = (
+                        "method",
+                        "description",
+                        "shock",
+                        "abs_max_bps",
+                        "mean_bps",
+                        "basis",
+                        "beta",
+                        "profile",
+                    )
+                    highlight_mask = filtered_metadata["Field"].str.lower().apply(
+                        lambda value: any(token in value for token in highlight_tokens)
+                    )
+                    if highlight_mask.any():
+                        filtered_metadata = filtered_metadata[highlight_mask]
+                    if not filtered_metadata.empty:
+                        filtered_metadata["Field"] = (
+                            filtered_metadata["Field"]
+                            .str.replace(r"\s*/\s*", " / ", regex=True)
+                            .str.replace(r"\[\d+\]", "", regex=True)
+                            .str.replace("_", " ")
+                            .str.title()
+                        )
+                        filtered_metadata = filtered_metadata.head(40)
+                if filtered_metadata is not None and not filtered_metadata.empty:
+                    self._add_dataframe_table(
+                        document,
+                        filtered_metadata,
+                        caption="Scenario Metadata",
+                        max_rows=40,
+                    )
             for image_label, _, image_bytes in scenario_images.get(scenario_id, []):
                 document.add_paragraph(image_label, style="Heading 3")
                 document.add_picture(io.BytesIO(image_bytes), width=Inches(6.0))

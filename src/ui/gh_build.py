@@ -168,17 +168,29 @@ def _release_asset_by_tag(tag: str) -> Optional[Dict[str, Any]]:
 
 def render_desktop_build_expander() -> None:
     with st.expander("Build / Download Desktop App (Windows)", expanded=False):
+        st.markdown(
+            "Use this builder to produce a fresh Windows desktop package of the ALM engine. "
+            "The desktop app mirrors the Streamlit UI and runs every calculation locally for maximum performance."
+        )
+        st.markdown(
+            "- **Build latest installer** dispatches a GitHub Actions workflow that bundles the EXE.\n"
+            "- Once the workflow finishes, the download link appears below.\n"
+            "- Keep the desktop app open during heavy analyses so long-running Monte Carlo and deterministic scenarios can finish."
+        )
+
         latest: Optional[Dict[str, Any]] = None
         try:
             latest = _latest_release_asset()
         except Exception:
             latest = None
         if latest:
-            name, url = latest["name"], latest["url"]
-            try:
-                st.link_button(f"Download {name}", url)
-            except Exception:
-                st.markdown(f"[Download {name}]({url})")
+            label = latest.get("tag") or "latest release"
+            published = latest.get("published_at")
+            if published:
+                published = published.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                st.caption(f"Latest published installer: **{label}** ({published})")
+            else:
+                st.caption(f"Latest published installer: **{label}**")
 
         if st.button("Build latest installer", type="primary"):
             try:

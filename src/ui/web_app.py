@@ -66,6 +66,36 @@ AUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth.yaml"
 LOGGER = logging.getLogger(__name__)
 
 
+def _render_web_landing_page() -> None:
+    st.subheader("About the DCF Deposits Desktop Experience")
+    st.markdown(
+        "The desktop application delivers the full Streamlit interface on your workstation, "
+        "so large Monte Carlo runs and deterministic shock sweeps execute without cloud limits."
+    )
+    st.markdown(
+        """
+        **Key capabilities**
+
+        - Load portfolios with up to 20,000 accounts and 1,000 Monte Carlo scenarios.
+        - Run parallel and non-parallel deterministic shocks with rich charting.
+        - Export Excel workbooks, Word narratives, and supporting charts in a single zip.
+        - All calculations and outputs stay on your machine—no external services required.
+        """
+    )
+    st.markdown(
+        """
+        **Getting started**
+
+        1. Trigger the build above (or reuse the latest published installer).
+        2. Download `DCF-Deposits-UI.exe` and launch it from your desktop.
+        3. Sign in with your configured credentials and upload account data to begin analysis.
+        """
+    )
+    st.info(
+        "Need to update the desktop app? Re-run the build workflow at any time to receive a freshly packaged EXE."
+    )
+
+
 def _trigger_auto_download(zip_bytes: bytes, file_name: str, token: str) -> None:
     """Inject a one-time auto-download script into the parent Streamlit document."""
     encoded = base64.b64encode(zip_bytes).decode()
@@ -1408,6 +1438,8 @@ def main() -> None:
 
     if not IS_DESKTOP_MODE:
         render_desktop_build_expander()
+        _render_web_landing_page()
+        return
 
     st.markdown(
         """
@@ -2391,6 +2423,8 @@ def main() -> None:
     else:
         _render_monte_carlo_group(results, monte_carlo_ids)
 
+    progress_bar = locals().get("progress_bar")
+    progress_text = locals().get("progress_text")
     if progress_bar:
         progress_bar.progress(100)
     if progress_text:
