@@ -44,6 +44,7 @@ def main() -> None:
     os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "true")
     os.environ.setdefault("STREAMLIT_SERVER_ADDRESS", "localhost")
     os.environ.setdefault("STREAMLIT_SERVER_PORT", "8501")
+    os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
 
     spec = importlib.util.find_spec("src.ui.web_app")
     if spec is None or not spec.origin:

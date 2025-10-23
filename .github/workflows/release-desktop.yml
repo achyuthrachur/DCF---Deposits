@@ -30,36 +30,7 @@ jobs:
 
       - name: Build desktop UI
         run: |
-          pyinstaller --onefile --name "DCF-Deposits-UI" \
-            --hidden-import=tkinter \
-            --hidden-import=pydantic \
-            --collect-all pydantic \
-            --collect-all pydantic_core \
-            --hidden-import=fredapi \
-            --collect-all fredapi \
-            --hidden-import=typer \
-            --hidden-import=rich \
-            --hidden-import=requests \
-            --hidden-import=scipy \
-            --hidden-import=pyarrow \
-            --hidden-import=plotly \
-            --hidden-import=seaborn \
-            --collect-all typer \
-            --collect-all pandas \
-            --collect-all numpy \
-            --collect-all matplotlib \
-            --collect-all openpyxl \
-            --collect-all docx \
-            --collect-all streamlit \
-            --collect-all plotly \
-            --collect-all seaborn \
-            --collect-all scipy \
-            --collect-all pyarrow \
-            --paths . \
-            --paths src \
-            --add-data "src;src" \
-            --add-data "config;config" \
-            src/desktop/ui_launcher.py
+          pyinstaller desktop_app.spec
         shell: bash
 
       - name: Create release
