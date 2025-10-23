@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 import requests
 import streamlit as st
@@ -105,7 +105,22 @@ def _poll_run_status(run_id: int) -> Tuple[str, Optional[str]]:
     return data.get("status", "unknown"), data.get("conclusion")
 
 
-def _latest_release_asset() -> Optional[Tuple[str, str]]:
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+
+
+def _latest_release_asset() -> Optional[Dict[str, Any]]:
     cfg = _gh_cfg()
     r = requests.get(
         f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/releases/latest",
@@ -114,14 +129,21 @@ def _latest_release_asset() -> Optional[Tuple[str, str]]:
     )
     if r.status_code != 200:
         return None
-    for asset in r.json().get("assets", []):
+    release = r.json()
+    published = _parse_iso(release.get("published_at") or release.get("created_at"))
+    for asset in release.get("assets", []):
         nm = (asset.get("name") or "").lower()
         if nm.endswith(".exe") and ("dcf" in nm or "deposits" in nm):
-            return asset.get("name") or "Windows Installer", asset.get("browser_download_url")
+            return {
+                "name": asset.get("name") or "Windows Installer",
+                "url": asset.get("browser_download_url"),
+                "tag": release.get("tag_name"),
+                "published_at": published,
+            }
     return None
 
 
-def _release_asset_by_tag(tag: str) -> Optional[Tuple[str, str]]:
+def _release_asset_by_tag(tag: str) -> Optional[Dict[str, Any]]:
     cfg = _gh_cfg()
     r = requests.get(
         f"{GH_API}/repos/{cfg['owner']}/{cfg['repo']}/releases/tags/{tag}",
@@ -130,22 +152,29 @@ def _release_asset_by_tag(tag: str) -> Optional[Tuple[str, str]]:
     )
     if r.status_code != 200:
         return None
-    for asset in r.json().get("assets", []):
+    release = r.json()
+    published = _parse_iso(release.get("published_at") or release.get("created_at"))
+    for asset in release.get("assets", []):
         nm = (asset.get("name") or "").lower()
         if nm.endswith(".exe") and ("dcf" in nm or "deposits" in nm):
-            return asset.get("name") or "Windows Installer", asset.get("browser_download_url")
+            return {
+                "name": asset.get("name") or "Windows Installer",
+                "url": asset.get("browser_download_url"),
+                "tag": tag,
+                "published_at": published,
+            }
     return None
 
 
 def render_desktop_build_expander() -> None:
     with st.expander("Build / Download Desktop App (Windows)", expanded=False):
-        latest = None
+        latest: Optional[Dict[str, Any]] = None
         try:
             latest = _latest_release_asset()
         except Exception:
             latest = None
         if latest:
-            name, url = latest
+            name, url = latest["name"], latest["url"]
             try:
                 st.link_button(f"Download {name}", url)
             except Exception:
@@ -168,14 +197,25 @@ def render_desktop_build_expander() -> None:
                     build["run_info"] = run
                     run_id = build["run_id"]
             status, conclusion = ("unknown", None)
-            asset: Optional[Tuple[str, str]] = None
+            asset: Optional[Dict[str, Any]] = None
             tag: Optional[str] = build.get("version")
             if run_id:
                 status, conclusion = _poll_run_status(run_id)
             if tag:
                 asset = _release_asset_by_tag(tag)
-            if status != "completed" and asset:
-                status, conclusion = "completed", "success"
+            if status != "completed":
+                if asset is not None:
+                    status, conclusion = "completed", "success"
+                else:
+                    # Fall back to latest release when newer than dispatch time.
+                    candidate = latest
+                    requested_at = build.get("requested_at")
+                    if candidate and requested_at:
+                        cand_time = candidate.get("published_at")
+                        req_time = _parse_iso(requested_at)
+                        if cand_time and req_time and cand_time >= req_time:
+                            asset = candidate
+                            status, conclusion = "completed", "success"
             label = f"Build status: {status}" + (f" / {conclusion}" if conclusion else "")
             st.write(label)
             pct = {"queued": 5, "in_progress": 60, "completed": 100}.get(status, 10)
@@ -192,7 +232,7 @@ def render_desktop_build_expander() -> None:
                     if not asset:
                         asset = _latest_release_asset()
                     if asset:
-                        nm, url = asset
+                        nm, url = asset["name"], asset["url"]
                         st.success("Installer ready.")
                         try:
                             st.link_button(f"Download {nm}", url)
