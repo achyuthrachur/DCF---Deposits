@@ -44,6 +44,7 @@ jobs:
             --hidden-import=pyarrow \
             --hidden-import=plotly \
             --hidden-import=seaborn \
+            --collect-all typer \
             --collect-all pandas \
             --collect-all numpy \
             --collect-all matplotlib \
