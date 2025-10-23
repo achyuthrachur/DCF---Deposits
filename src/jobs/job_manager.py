@@ -131,7 +131,7 @@ class JobStatusWriter:
     def mark_dispatched(self, pid: int) -> JobStatus:
         return self.write(
             state="dispatched",
-            message="Job dispatched to worker process.",
+            message="Launching local analysis worker...",
             pid=pid,
             step=0,
             total=1,

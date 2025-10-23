@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import os
 import shutil
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -33,6 +34,24 @@ def _ensure_paths() -> Path:
     return src_path
 
 
+def _pick_server_port(preferred: int = 8501) -> int:
+    def _can_bind(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+                return True
+            except OSError:
+                return False
+
+    if _can_bind(preferred):
+        return preferred
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def main() -> None:
     src_path = _ensure_paths()
 
@@ -43,7 +62,8 @@ def main() -> None:
     os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
     os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
     os.environ["STREAMLIT_SERVER_ADDRESS"] = "localhost"
-    os.environ["STREAMLIT_SERVER_PORT"] = "8501"
+    port = _pick_server_port()
+    os.environ["STREAMLIT_SERVER_PORT"] = str(port)
     os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
 
     spec = importlib.util.find_spec("src.ui.web_app")
@@ -74,7 +94,7 @@ def main() -> None:
     script = str(script_path)
     sys.argv = ["streamlit", "run", script]
 
-    print("Launching DCF Deposits Desktop UI at http://localhost:8501 ...")
+    print(f"Launching DCF Deposits Desktop UI at http://localhost:{port} ...")
     try:
         import threading
         import time
@@ -82,7 +102,7 @@ def main() -> None:
 
         def _open_browser() -> None:
             time.sleep(2)
-            webbrowser.open("http://localhost:8501", new=2)
+            webbrowser.open(f"http://localhost:{port}", new=2)
 
         threading.Thread(target=_open_browser, daemon=True).start()
     except Exception:
