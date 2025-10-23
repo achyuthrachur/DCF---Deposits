@@ -89,7 +89,7 @@ def main() -> None:
         atexit.register(_cleanup_tmp)
         script_path = stub_path
 
-    import streamlit.web.cli as stcli
+import streamlit.web.cli as stcli
 
     script = str(script_path)
     sys.argv = [
@@ -119,4 +119,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()
