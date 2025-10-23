@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Streamlit web interface for the NMD ALM engine."""
 
 from __future__ import annotations
@@ -2062,7 +2062,7 @@ def main() -> None:
     st.caption(
         "Execution mode: GitHub Actions (remote worker)"
         if jobs.USING_GITHUB_DRIVER
-        else "Execution mode: Local worker (runs inside the Streamlit container)"
+        else "Execution mode: Desktop worker (runs on this machine)"
     )
     gh_repo_env = os.environ.get("GH_REPO", "")
     gh_token_present = bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
@@ -2398,6 +2398,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 

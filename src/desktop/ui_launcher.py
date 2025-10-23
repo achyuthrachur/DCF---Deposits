@@ -11,6 +11,7 @@ import socket
 import sys
 import tempfile
 from pathlib import Path
+from typing import Final
 
 try:  # pragma: no cover - informs PyInstaller of runtime deps
     import src.desktop._pyinstaller_hints  # type: ignore  # noqa: F401
@@ -122,4 +123,10 @@ if __name__ == "__main__":
     import multiprocessing
 
     multiprocessing.freeze_support()
+    main_pid_env: Final[str] = "DCF_DESKTOP_MAIN_PID"
+    existing_pid = os.environ.get(main_pid_env)
+    current_pid = str(os.getpid())
+    if existing_pid and existing_pid != current_pid:
+        sys.exit(0)
+    os.environ[main_pid_env] = current_pid
     main()
