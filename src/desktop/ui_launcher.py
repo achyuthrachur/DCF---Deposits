@@ -90,7 +90,7 @@ def main() -> None:
         atexit.register(_cleanup_tmp)
         script_path = stub_path
 
-import streamlit.web.cli as stcli
+    import streamlit.web.cli as stcli
 
     script = str(script_path)
     sys.argv = [
